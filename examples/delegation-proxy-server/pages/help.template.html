@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Endpoint Requirements — {{.Path}}</title></head>
+<body>
+<h1>Endpoint Requirements</h1>
+<p><strong>Host:</strong> {{.Host}}</p>
+<p><strong>Path:</strong> {{.Path}}</p>
+<h2>Required Scopes</h2>
+{{- if .Scopes}}
+<ul>
+{{range .Scopes}}  <li><code>{{.}}</code></li>
+{{end -}}
+</ul>
+{{- else}}
+<p>No specific scopes required.</p>
+{{- end}}
+<h2>How to authorize an agent</h2>
+<ol>
+  <li>Have the agent send a request to this endpoint (without cookies).</li>
+  <li>The agent receives a <code>401</code> response containing a <code>delegation_url</code>.</li>
+  <li>Open the <code>delegation_url</code> in a browser and approve the grant.</li>
+  <li>Tell the agent to retry — it will now be authorized.</li>
+</ol>
+<p><a href="https://github.com/aarongoldman/delegated-access-token">Delegated Access Token specification</a></p>
+</body>
+</html>

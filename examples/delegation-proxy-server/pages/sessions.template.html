@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Active Grants</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 680px; margin: 60px auto; padding: 0 20px; color: #1a1a1a; }
+  h1   { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: #555; margin-top: 0; margin-bottom: 24px; }
+  .empty { color: #888; }
+  .grant { border: 1px solid #e4e4e7; border-radius: 8px; padding: 14px 18px; margin: 16px 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .grant-info { flex: 1; }
+  .resource { font-family: monospace; font-size: 0.95rem; margin-bottom: 6px; }
+  .resource .method { color: #0070f3; font-weight: 600; margin-right: 8px; }
+  .meta { font-size: 0.82rem; color: #666; }
+  .scopes { margin-top: 6px; }
+  .scope { display: inline-block; background: #dbeafe; color: #1d4ed8; border-radius: 4px; padding: 2px 8px; margin: 2px; font-size: 0.82rem; font-weight: 500; }
+  .revoke button { padding: 8px 18px; border: 1px solid #e4e4e7; border-radius: 7px; background: #f4f4f5; color: #333; cursor: pointer; font-size: 0.9rem; }
+  .revoke button:hover { background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }
+  details { margin-top: 10px; }
+  details summary { font-size: 0.8rem; color: #999; cursor: pointer; user-select: none; }
+  details pre { background: #f4f4f5; border-radius: 6px; padding: 10px 14px; font-size: 0.78rem; overflow-x: auto; margin: 6px 0 0 0; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>Active Grants</h1>
+<p class="subtitle">Grants that agents currently hold on your behalf.</p>
+
+{{if not .Grants}}
+<p class="empty">No active grants.</p>
+{{else}}
+{{range .Grants}}
+<div class="grant">
+  <div class="grant-info">
+    <div class="resource">
+      <span class="method">{{join .Methods ", "}}</span><strong>{{.HostPattern}}</strong>{{.PathPattern}}
+    </div>
+    {{if .Scopes}}
+    <div class="scopes">{{range .Scopes}}<span class="scope">{{.}}</span>{{end}}</div>
+    {{end}}
+    <div class="meta">
+      delegation {{.DelegationID}} · {{.Duration}}
+    </div>
+    <details>
+      <summary>raw</summary>
+      <pre>{{toJSON .}}</pre>
+    </details>
+  </div>
+  <div class="revoke">
+    <form method="POST" action="/revoke">
+      <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+      <input type="hidden" name="delegation_id" value="{{.DelegationID}}">
+      <button type="submit">Revoke</button>
+    </form>
+  </div>
+</div>
+{{end}}
+{{end}}
+</body>
+</html>
