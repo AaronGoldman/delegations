@@ -41,9 +41,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	store := delegation.NewInMemoryDelegationStore()
 	ss := &delegation.SessionsServer{
-		DelegationURLSecret: []byte(jwtSecret),
-		IdDerivationSecret:  serverSecret,
-		Store:               store,
+		DelegationURLSecret:    []byte(jwtSecret),
+		IdDerivationSecret:     serverSecret,
+		DelegationHeaderPubKey: pub,
+		Store:                  store,
 	}
 
 	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
@@ -64,11 +65,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 // TestDelegationFlow exercises the full happy path:
 //
 //	1. GET /api/whoami (no cookies) → 401 + delegation_url
-//	2. GET /delegate?token=…        → HTML grant approval form
-//	3. POST /delegate/grant         → grant created, "Access Granted" page
-//	4. GET /sessions                → HTML page listing the new grant with a Revoke button
+//	2. GET /delegations/ask?token=…    → HTML grant approval form
+//	3. POST /delegations/grant         → grant created, "Access Granted" page
+//	4. GET /delegations                → HTML page listing the new grant with a Revoke button
 //	5. GET /api/whoami (with cookies) → 200 with full identity JSON
-//	6. POST /sessions/revoke        → grant revoked, redirect to /sessions
+//	6. POST /delegations/revoke        → grant revoked, redirect to /delegations
 //	7. GET /api/whoami              → 401 again (grant is gone)
 func TestDelegationFlow(t *testing.T) {
 	srv := newTestServer(t)
@@ -133,8 +134,8 @@ func TestDelegationFlow(t *testing.T) {
 		t.Fatal("step 2: csrf_token cookie not set")
 	}
 
-	// ── Step 3: POST /delegate/grant → grant created, confirmation page ────
-	resp3, err := client.PostForm(srv.URL+"/grant", url.Values{
+	// ── Step 3: POST /delegations/grant → grant created, confirmation page ────
+	resp3, err := client.PostForm(srv.URL+"/delegations/grant", url.Values{
 		"token":      {token},
 		"csrf_token": {csrfToken},
 		"action":     {"approve"},
@@ -153,8 +154,8 @@ func TestDelegationFlow(t *testing.T) {
 		t.Fatalf("step 3: expected 'Access Granted' in body, got: %s", body3)
 	}
 
-	// ── Step 4: GET /sessions → HTML page listing active grants ────────────
-	resp4, err := client.Get(srv.URL + "/sessions")
+	// ── Step 4: GET /delegations → HTML page listing active grants ────────────
+	resp4, err := client.Get(srv.URL + "/delegations")
 	if err != nil {
 		t.Fatalf("step 4: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestDelegationFlow(t *testing.T) {
 		t.Fatal("step 6: sessions_csrf cookie not set")
 	}
 
-	resp6, err := client.PostForm(srv.URL+"/revoke", url.Values{
+	resp6, err := client.PostForm(srv.URL+"/delegations/revoke", url.Values{
 		"csrf_token":    {sessionsCsrf},
 		"delegation_id": {whoami.DelegationID},
 	})

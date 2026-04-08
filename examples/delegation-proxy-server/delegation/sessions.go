@@ -2,6 +2,8 @@ package delegation
 
 import (
 	_ "embed"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -10,14 +12,16 @@ import (
 )
 
 // SessionsServer handles all human-facing UI endpoints:
-// GET  /delegate  — delegation approval form
-// POST /grant     — process the approval form
-// GET  /sessions  — list active delegations
-// POST /revoke    — revoke a delegation
+// GET  /delegations/ask   — delegation approval form
+// POST /delegations/grant — process the approval form
+// GET  /delegations       — list active delegations
+// GET  /delegations/key   — returns the public key for verifying X-Delegation headers
+// POST /delegations/revoke — revoke a delegation
 type SessionsServer struct {
-	DelegationURLSecret []byte
-	IdDerivationSecret  string
-	Store               DelegationStore
+	DelegationURLSecret    []byte
+	IdDerivationSecret     string
+	DelegationHeaderPubKey ed25519.PublicKey
+	Store                  DelegationStore
 }
 
 var tmplFuncs = template.FuncMap{
@@ -396,14 +400,26 @@ func (s *SessionsServer) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("REVOKE delegation=%s", delegationID)
-	http.Redirect(w, r, "/sessions", http.StatusSeeOther)
+	http.Redirect(w, r, "/delegations", http.StatusSeeOther)
+}
+
+// getPublicKey handles GET /delegations/key.
+func (s *SessionsServer) getPublicKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("ed25519-" + hex.EncodeToString(s.DelegationHeaderPubKey)))
 }
 
 // RegisterHandlers registers all SessionsServer handlers into the given mux.
-// This includes /delegate, /grant, /sessions, and /revoke endpoints.
+// This includes /delegations/ask, /delegations/grant, /delegations, /delegations/key,
+// and /delegations/revoke endpoints.
 func (s *SessionsServer) RegisterHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/delegate", s.showGrantUI)
-	mux.HandleFunc("/grant", s.processGrant)
-	mux.HandleFunc("/sessions", s.listGrants)
-	mux.HandleFunc("/revoke", s.revokeGrant)
+	mux.HandleFunc("/delegations/ask", s.showGrantUI)
+	mux.HandleFunc("/delegations/grant", s.processGrant)
+	mux.HandleFunc("/delegations", s.listGrants)
+	mux.HandleFunc("/delegations/key", s.getPublicKey)
+	mux.HandleFunc("/delegations/revoke", s.revokeGrant)
 }

@@ -5,10 +5,10 @@
 //
 // Endpoints:
 //
-//	GET  /api/whoami        Protected by delegated-access auth. Returns caller identity.
-//	GET  /delegate?token=…  Delegation grant UI (shown to the user in a browser).
-//	POST /grant             Processes the grant form submission (CSRF protected).
-//	GET  /sessions          Lists all active grants.
+//	GET  /api/whoami              Protected by delegated-access auth. Returns caller identity.
+//	GET  /delegations/ask?token=… Delegation grant UI (shown to the user in a browser).
+//	POST /delegations/grant       Processes the grant form submission (CSRF protected).
+//	GET  /delegations             Lists all active grants.
 //
 // config.json keys:
 //
@@ -68,9 +68,10 @@ func main() {
 	secret := []byte(delegationURLSecret)
 
 	ss := &delegation.SessionsServer{
-		DelegationURLSecret: secret,
-		IdDerivationSecret:  idDerivationSecret,
-		Store:               store,
+		DelegationURLSecret:    secret,
+		IdDerivationSecret:     idDerivationSecret,
+		DelegationHeaderPubKey: delegationHeaderPub,
+		Store:                  store,
 	}
 
 	authMux := delegation.NewAuthMiddlewareMux(
@@ -93,10 +94,11 @@ func main() {
 	port := listenAddr[strings.LastIndex(listenAddr, ":"):]
 	stagingURL := "http://staging.localhost" + port
 	log.Printf("delegation-proxy-server listening on %s", baseURL)
-	log.Printf("  GET  %s/api/whoami       — protected demo endpoint", baseURL)
-	log.Printf("  GET  %s/api/whoami       — protected demo endpoint (subdomain)", stagingURL)
-	log.Printf("  GET  %s/delegate?token=… — grant approval UI", baseURL)
-	log.Printf("  GET  %s/sessions         — list active grants", baseURL)
+	log.Printf("  GET  %s/api/whoami                 — protected demo endpoint", baseURL)
+	log.Printf("  GET  %s/api/whoami                 — protected demo endpoint (subdomain)", stagingURL)
+	log.Printf("  GET  %s/delegations/ask?token=…   — grant approval UI", baseURL)
+	log.Printf("  GET  %s/delegations                — list active grants", baseURL)
+	log.Printf("  GET  %s/delegations/key            — Ed25519 public key for verifying signatures", baseURL)
 
 	srv := &http.Server{
 		Addr:         listenAddr,

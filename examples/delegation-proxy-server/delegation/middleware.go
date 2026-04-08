@@ -17,7 +17,7 @@ const (
 	agentCookieName     = "agent_cookie"
 	sessionCookieName   = "session_cookie"
 	principalCookieName = "principal_cookie"
-	delegationPath      = "/delegate"
+	delegationPath      = "/delegations/ask"
 )
 
 // GetAuthInfo reads and verifies the X-Delegation header set by AuthMiddlewareMux.

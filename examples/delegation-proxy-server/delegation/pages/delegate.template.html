@@ -44,7 +44,7 @@
 </div>
 {{end}}
 
-<form method="POST" action="/grant">
+<form method="POST" action="/delegations/grant">
   <input type="hidden" name="token"      value="{{.Token}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
@@ -84,7 +84,7 @@
     </label>
     <label>
       <input type="radio" name="duration" value="agent">
-      <strong>This agent</strong> <small>— across sessions, until manually revoked via /sessions</small>
+      <strong>This agent</strong> <small>— across sessions, until manually revoked via /delegations</small>
     </label>
   </fieldset>
 
