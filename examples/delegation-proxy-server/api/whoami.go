@@ -8,12 +8,12 @@ import (
 	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/delegation"
 )
 
-// Register registers all API routes into the given auth middleware mux.
-// This includes GET /api/whoami (requires "profile_view" scope).
-func Register(mux interface {
-	HandleFunc(path string, handler http.HandlerFunc, scopes []string)
-}, pubKey ed25519.PublicKey) {
-	mux.HandleFunc("/api/whoami", whoamiHandler(pubKey), []string{"profile_view"})
+// NewMux creates and returns an http.Handler with all API routes registered.
+// pubKey is the Ed25519 public key used to verify X-Delegation headers.
+func NewMux(pubKey ed25519.PublicKey) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/whoami", whoamiHandler(pubKey))
+	return mux
 }
 
 // whoamiHandler returns a handler for GET /api/whoami — the demo protected endpoint.

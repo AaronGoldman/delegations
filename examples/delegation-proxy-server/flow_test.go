@@ -51,13 +51,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 	srv.Start()
 
 	authMux := delegation.NewAuthMiddlewareMux(serverSecret, 10*time.Minute, []byte(jwtSecret), store, priv)
-	api.Register(authMux, pub)
+	authMux.RegisterSessionHandlers(ss)
+	authMux.Handle("/api/", api.NewMux(pub), []string{"profile_view"})
 
-	mux := http.NewServeMux()
-	ss.RegisterHandlers(mux)
-	mux.Handle("/api/", authMux)
-
-	srv.Config.Handler = mux
+	srv.Config.Handler = authMux
 	t.Cleanup(srv.Close)
 	return srv
 }
