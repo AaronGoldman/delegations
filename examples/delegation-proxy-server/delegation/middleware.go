@@ -1,8 +1,8 @@
 package delegation
 
 import (
-	_ "embed"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -14,7 +14,7 @@ import (
 
 // WrapMux loads delegation config and creates middleware infrastructure.
 // Returns the wrapped AuthMiddlewareMux (with sessions registered) and public key.
-func WrapMux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
+func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 	cfg, err := LoadConfig("config.json")
 	if err != nil {
 		return nil, nil, err
