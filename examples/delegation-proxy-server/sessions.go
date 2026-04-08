@@ -15,9 +15,9 @@ import (
 // GET  /sessions  — list active delegations
 // POST /revoke    — revoke a delegation
 type SessionsServer struct {
-	jwtSecret    []byte
-	serverSecret string
-	store        DelegationStore
+	delegationURLSecret []byte
+	idDerivationSecret  string
+	store               DelegationStore
 }
 
 var tmplFuncs = template.FuncMap{
@@ -153,7 +153,7 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing token parameter", http.StatusBadRequest)
 		return
 	}
-	claims, err := DelegationFromJWT(s.jwtSecret, token)
+	claims, err := DelegationFromJWT(s.delegationURLSecret, token)
 	if err != nil {
 		http.Error(w, "invalid or expired delegation token: "+err.Error(), http.StatusBadRequest)
 		return
@@ -173,7 +173,7 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   365 * 24 * 60 * 60, // 1 year, refreshed on each visit
 	})
-	principalID, err := deriveID(s.serverSecret, principalVal)
+	principalID, err := deriveID(s.idDerivationSecret, principalVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -234,7 +234,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	action := r.FormValue("action")
 	duration := r.FormValue("duration")
 
-	claims, err := DelegationFromJWT(s.jwtSecret, token)
+	claims, err := DelegationFromJWT(s.delegationURLSecret, token)
 	if err != nil {
 		http.Error(w, "invalid or expired delegation token: "+err.Error(), http.StatusBadRequest)
 		return
@@ -262,7 +262,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	if c, _ := r.Cookie(principalCookieName); c != nil {
 		principalVal = c.Value
 	}
-	principalID, err := deriveID(s.serverSecret, principalVal)
+	principalID, err := deriveID(s.idDerivationSecret, principalVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

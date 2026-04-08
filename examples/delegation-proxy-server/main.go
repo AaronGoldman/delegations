@@ -12,12 +12,16 @@
 //
 // config.json keys:
 //
-//	listen_addr    Listen address, e.g. "127.0.0.1:8080"  (default)
-//	jwt_secret     HS256 signing key                       (auto-generated)
-//	server_secret  UUIDv5 namespace UUID                   (auto-generated)
+//	listen_addr             Listen address, e.g. "127.0.0.1:8080"  (default)
+//	delegation_url_secret   HS256 signing key for delegation URL JWTs  (auto-generated)
+//	id_derivation_secret    UUIDv5 namespace UUID for agent/session IDs (auto-generated)
+//	delegation_header_key   Ed25519 private key hex for X-Delegation header (auto-generated)
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -40,28 +44,35 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	jwtSecret := cfg["jwt_secret"]
-	if jwtSecret == "" {
-		log.Fatal("jwt_secret missing from config.json")
+	// Fill in any missing secrets and write config back if needed.
+	if err := ensureConfigSecrets(cfg, "config.json"); err != nil {
+		log.Fatalf("config secrets: %v", err)
 	}
-	serverSecret := cfg["server_secret"]
-	if serverSecret == "" {
-		log.Fatal("server_secret missing from config.json")
+
+	delegationURLSecret := cfg["delegation_url_secret"]
+	idDerivationSecret := cfg["id_derivation_secret"]
+	if _, err := parseUUID(idDerivationSecret); err != nil {
+		log.Fatalf("id_derivation_secret is not a valid UUID: %v", err)
 	}
-	if _, err := parseUUID(serverSecret); err != nil {
-		log.Fatalf("server_secret is not a valid UUID: %v", err)
-	}
+
 	listenAddr := cfg["listen_addr"]
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:8080"
 	}
 
-	store  := NewInMemoryDelegationStore()
-	secret := []byte(jwtSecret)
+	keyBytes, err := hex.DecodeString(cfg["delegation_header_key"])
+	if err != nil || len(keyBytes) != ed25519.PrivateKeySize {
+		log.Fatalf("delegation_header_key in config.json is invalid (want %d-byte hex)", ed25519.PrivateKeySize)
+	}
+	delegationHeaderKey := ed25519.PrivateKey(keyBytes)
+	delegationHeaderPub := delegationHeaderKey.Public().(ed25519.PublicKey)
 
-	ss     := &SessionsServer{jwtSecret: secret, serverSecret: serverSecret, store: store}
-	apiMux := newAuthMiddlewareMux(serverSecret, 10*time.Minute, secret, store)
-	apiMux.HandleFunc("/api/whoami", whoamiHandler, []string{"profile_view"})
+	store  := NewInMemoryDelegationStore()
+	secret := []byte(delegationURLSecret)
+
+	ss     := &SessionsServer{delegationURLSecret: secret, idDerivationSecret: idDerivationSecret, store: store}
+	apiMux := newAuthMiddlewareMux(idDerivationSecret, 10*time.Minute, secret, store, delegationHeaderKey)
+	apiMux.HandleFunc("/api/whoami", newWhoamiHandler(delegationHeaderPub), []string{"profile_view"})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/delegate", ss.showGrantUI)
@@ -92,7 +103,7 @@ func main() {
 }
 
 // loadOrCreateConfig reads config.json as a flat map[string]string.
-// If the file does not exist it is created with localhost defaults and random secrets.
+// If the file does not exist it is created with defaults and random secrets.
 func loadOrCreateConfig(path string) (map[string]string, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := writeDefaultConfig(path); err != nil {
@@ -112,19 +123,67 @@ func loadOrCreateConfig(path string) (map[string]string, error) {
 	return cfg, nil
 }
 
-// writeDefaultConfig writes a config.json with localhost defaults and random secrets.
+// writeDefaultConfig writes a config.json with localhost defaults and all random secrets.
 func writeDefaultConfig(path string) error {
-	jwtSecret, err := randomHex(32) // 256-bit
+	urlSecret, err := randomHex(32) // 256-bit HS256 key
 	if err != nil {
-		return fmt.Errorf("generate jwt_secret: %w", err)
+		return fmt.Errorf("generate delegation_url_secret: %w", err)
 	}
-	cfg := map[string]string{
-		"jwt_secret":    jwtSecret,
-		"server_secret": newUUIDv4(),
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate delegation_header_key: %w", err)
 	}
+	return writeConfig(path, map[string]string{
+		"delegation_url_secret": urlSecret,
+		"id_derivation_secret":  newUUIDv4(),
+		"delegation_header_key": hex.EncodeToString([]byte(priv)),
+	})
+}
+
+// writeConfig serialises cfg as indented JSON and writes it atomically to path (mode 0600).
+func writeConfig(path string, cfg map[string]string) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
+// ensureConfigSecrets fills in any missing secrets in cfg, writing back if needed.
+// Generates missing: delegation_url_secret, id_derivation_secret, delegation_header_key.
+func ensureConfigSecrets(cfg map[string]string, path string) error {
+	updated := false
+
+	if cfg["delegation_url_secret"] == "" {
+		secret, err := randomHex(32)
+		if err != nil {
+			return fmt.Errorf("generate delegation_url_secret: %w", err)
+		}
+		cfg["delegation_url_secret"] = secret
+		updated = true
+		log.Printf("Generated delegation_url_secret")
+	}
+
+	if cfg["id_derivation_secret"] == "" {
+		cfg["id_derivation_secret"] = newUUIDv4()
+		updated = true
+		log.Printf("Generated id_derivation_secret")
+	}
+
+	if cfg["delegation_header_key"] == "" {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return fmt.Errorf("generate delegation_header_key: %w", err)
+		}
+		cfg["delegation_header_key"] = hex.EncodeToString([]byte(priv))
+		updated = true
+		log.Printf("Generated delegation_header_key")
+	}
+
+	if updated {
+		if err := writeConfig(path, cfg); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+	}
+	return nil
 }

@@ -2,7 +2,7 @@ package main
 
 import (
 	_ "embed"
-	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -12,12 +12,18 @@ import (
 	"time"
 )
 
-type authContextKey struct{}
-
-// GetAuthInfo retrieves the Delegation set by authMiddlewareMux.
-// Returns nil if called outside of the middleware (should never happen in practice).
-func GetAuthInfo(r *http.Request) *Delegation {
-	d, _ := r.Context().Value(authContextKey{}).(*Delegation)
+// GetAuthInfo reads and verifies the X-Delegation header set by authMiddlewareMux.
+// Returns nil if the header is missing or the Ed25519 signature is invalid.
+func GetAuthInfo(r *http.Request, pubKey ed25519.PublicKey) *Delegation {
+	token := r.Header.Get("X-Delegation")
+	if token == "" {
+		return nil
+	}
+	d, err := DelegationFromSignedJWT(pubKey, token)
+	if err != nil {
+		log.Printf("GetAuthInfo: %v", err)
+		return nil
+	}
 	return d
 }
 
@@ -46,20 +52,22 @@ var helpTemplate = template.Must(template.New("help").Parse(helpHTML))
 // authMiddlewareMux wraps http.ServeMux so that each HandleFunc call carries
 // the required scopes for that endpoint. Auth is enforced per-handler.
 type authMiddlewareMux struct {
-	mux          *http.ServeMux
-	serverSecret string
-	tokenTTL     time.Duration
-	jwtSecret    []byte
-	store        DelegationStore
+	mux                 *http.ServeMux
+	idDerivationSecret  string
+	tokenTTL            time.Duration
+	delegationURLSecret []byte
+	store               DelegationStore
+	delegationHeaderKey ed25519.PrivateKey
 }
 
-func newAuthMiddlewareMux(serverSecret string, tokenTTL time.Duration, jwtSecret []byte, store DelegationStore) *authMiddlewareMux {
+func newAuthMiddlewareMux(idDerivationSecret string, tokenTTL time.Duration, delegationURLSecret []byte, store DelegationStore, delegationHeaderKey ed25519.PrivateKey) *authMiddlewareMux {
 	return &authMiddlewareMux{
-		mux:          http.NewServeMux(),
-		serverSecret: serverSecret,
-		tokenTTL:     tokenTTL,
-		jwtSecret:    jwtSecret,
-		store:        store,
+		mux:                 http.NewServeMux(),
+		idDerivationSecret:  idDerivationSecret,
+		tokenTTL:            tokenTTL,
+		delegationURLSecret: delegationURLSecret,
+		store:               store,
+		delegationHeaderKey: delegationHeaderKey,
 	}
 }
 
@@ -100,20 +108,20 @@ func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 			} else {
 				sessionVal = sessionC.Value
 			}
-			agentID, _ := deriveID(m.serverSecret, agentVal)
-			sessionID, _ := deriveID(m.serverSecret, sessionVal)
+			agentID, _ := deriveID(m.idDerivationSecret, agentVal)
+			sessionID, _ := deriveID(m.idDerivationSecret, sessionVal)
 			log.Printf("ISSUE agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
 			m.writeDelegationError(w, r, agentID, sessionID, scopes)
 			return
 		}
 
-		agentID, err := deriveID(m.serverSecret, agentC.Value)
+		agentID, err := deriveID(m.idDerivationSecret, agentC.Value)
 		if err != nil {
 			log.Printf("ERROR deriveID(agent): %v", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		sessionID, err := deriveID(m.serverSecret, sessionC.Value)
+		sessionID, err := deriveID(m.idDerivationSecret, sessionC.Value)
 		if err != nil {
 			log.Printf("ERROR deriveID(session): %v", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -142,8 +150,14 @@ func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 			}
 		}
 
-		ctx := context.WithValue(r.Context(), authContextKey{}, &delegation)
-		handler(w, r.WithContext(ctx))
+		token, err := delegation.SignedJWT(m.delegationHeaderKey)
+		if err != nil {
+			log.Printf("ERROR SignedJWT: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		r.Header.Set("X-Delegation", token)
+		handler(w, r)
 	})
 }
 
@@ -190,7 +204,7 @@ func (m *authMiddlewareMux) writeDelegationError(w http.ResponseWriter, r *http.
 		Scopes:      scopes,
 		ExpiresAt:   time.Now().Add(m.tokenTTL).UTC().Format(time.RFC3339),
 		IssuedAt:    time.Now().Unix(),
-	}).JWT(m.jwtSecret)
+	}).JWT(m.delegationURLSecret)
 	if err != nil {
 		log.Printf("ERROR JWT: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

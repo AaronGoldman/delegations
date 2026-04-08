@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -34,6 +35,11 @@ type Delegation struct {
 // jwtHeader is the base64url-encoded JWT header {"alg":"HS256","typ":"JWT"}.
 var jwtHeader = base64.RawURLEncoding.EncodeToString(
 	[]byte(`{"alg":"HS256","typ":"JWT"}`),
+)
+
+// jwtHeaderEdDSA is the base64url-encoded JWT header {"alg":"EdDSA","typ":"JWT"}.
+var jwtHeaderEdDSA = base64.RawURLEncoding.EncodeToString(
+	[]byte(`{"alg":"EdDSA","typ":"JWT"}`),
 )
 
 // JWT creates a compact serialized HS256 JWT from the delegation.
@@ -90,6 +96,45 @@ func DelegationFromJWT(secret []byte, token string) (*Delegation, error) {
 		}
 	}
 
+	return &d, nil
+}
+
+// SignedJWT creates a compact serialized EdDSA (Ed25519) JWT from the delegation.
+// Used by authMiddlewareMux to set the X-Delegation header on authenticated requests.
+func (d Delegation) SignedJWT(privKey ed25519.PrivateKey) (string, error) {
+	payload, err := json.Marshal(d)
+	if err != nil {
+		return "", fmt.Errorf("SignedJWT: marshal: %w", err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	signingInput := jwtHeaderEdDSA + "." + encodedPayload
+	sig := ed25519.Sign(privKey, []byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+// DelegationFromSignedJWT verifies the Ed25519 signature of a compact JWT and
+// returns the delegation. Used by GetAuthInfo to read the X-Delegation header.
+func DelegationFromSignedJWT(pubKey ed25519.PublicKey, token string) (*Delegation, error) {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("DelegationFromSignedJWT: malformed token (expected 3 parts)")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("DelegationFromSignedJWT: decode signature: %w", err)
+	}
+	signingInput := parts[0] + "." + parts[1]
+	if !ed25519.Verify(pubKey, []byte(signingInput), sig) {
+		return nil, fmt.Errorf("DelegationFromSignedJWT: invalid signature")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("DelegationFromSignedJWT: decode payload: %w", err)
+	}
+	var d Delegation
+	if err := json.Unmarshal(payload, &d); err != nil {
+		return nil, fmt.Errorf("DelegationFromSignedJWT: unmarshal: %w", err)
+	}
 	return &d, nil
 }
 

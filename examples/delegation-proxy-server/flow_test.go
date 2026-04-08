@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,14 +21,19 @@ func newTestServer(t *testing.T) *httptest.Server {
 		serverSecret = "12345678-1234-1234-1234-123456789abc"
 	)
 
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate delegation header key: %v", err)
+	}
+
 	store := NewInMemoryDelegationStore()
-	ss := &SessionsServer{jwtSecret: []byte(jwtSecret), serverSecret: serverSecret, store: store}
+	ss := &SessionsServer{delegationURLSecret: []byte(jwtSecret), idDerivationSecret: serverSecret, store: store}
 
 	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
 	srv.Start()
 
-	apiMux := newAuthMiddlewareMux(serverSecret, 10*time.Minute, []byte(jwtSecret), store)
-	apiMux.HandleFunc("/api/whoami", whoamiHandler, []string{"profile_view"})
+	apiMux := newAuthMiddlewareMux(serverSecret, 10*time.Minute, []byte(jwtSecret), store, priv)
+	apiMux.HandleFunc("/api/whoami", newWhoamiHandler(pub), []string{"profile_view"})
 
 	mux := http.NewServeMux()
 

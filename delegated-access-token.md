@@ -1,7 +1,7 @@
 # Delegated Access Token Specification
 
 **Editor:** Aaron Goldman
-**Repository:** https://github.com/aarongoldman/delegated-access-token
+**Repository:** https://github.com/AaronGoldman/delegations
 
 ## Abstract
 
@@ -126,7 +126,7 @@ Set-Cookie: session_cookie=6ba7b810-9dad-11d1-80b4-00c04fd430c8; HttpOnly; Secur
 Cache-Control: no-store
 
 {
-  "type": "https://github.com/aarongoldman/delegated-access-token#delegation-required",
+  "type": "https://github.com/aarongoldman/delegations#delegation-required",
   "delegation_url": "https://auth.example.com/delegate?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6IjU1MGU4NDAwLWUyOWItNDFkNC1hNzE2LTQ0NjY1NTQ0MDAwMCIsInNlc3Npb25faWQiOiI2YmE3YjgxMC05ZGFkLTExZDEtODBiNC0wMGMwNGZkNDMwYzgiLCJob3N0IjoiYXBpLmV4YW1wbGUuY29tIiwicGF0aCI6Ii91c2Vycy8xMjMvbWVzc2FnZXMiLCJtZXRob2RzIjpbIkdFVCJdLCJzY29wZXMiOlsiUkVBRF9ETSJdLCJ0dGwiOlsiNGgiLCIyZCIsIjkwZCIsIjQwMGQiXSwiZXhwaXJlc19hdCI6IjIwMjYtMDItMTlUMTA6MTU6MDBaIiwiaWF0IjoxNzA4MzQ0MDAwfQ.signature",
   "documentation_url": "https://api.example.com/docs/scopes"
 }
@@ -239,7 +239,7 @@ When the agent attempts to access a protected resource without valid authorizati
 
 - **type** (string, URI) - REQUIRED
   - URI reference to this specification
-  - Fixed value: `"https://github.com/aarongoldman/delegated-access-token#delegation-required"`
+  - Fixed value: `"https://github.com/aarongoldman/delegations#delegation-required"`
 
 - **delegation_url** (string, URL) - REQUIRED
   - URL to delegation page with signed JWT token
