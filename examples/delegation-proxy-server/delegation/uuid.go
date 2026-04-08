@@ -1,4 +1,4 @@
-package main
+package delegation
 
 import (
 	"crypto/rand"
@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// randomHex returns n random bytes hex-encoded (2n chars).
-func randomHex(n int) (string, error) {
+// RandomHex returns n random bytes hex-encoded (2n chars).
+func RandomHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -21,15 +21,15 @@ func randomHex(n int) (string, error) {
 // the namespace) and cookieValue (the raw cookie string). This matches
 // Python's uuid.uuid5(server_secret, cookie_value).
 func deriveID(serverSecret, cookieValue string) (string, error) {
-	ns, err := parseUUID(serverSecret)
+	ns, err := ParseUUID(serverSecret)
 	if err != nil {
 		return "", fmt.Errorf("deriveID: invalid server secret: %w", err)
 	}
 	return uuidv5(ns, []byte(cookieValue)), nil
 }
 
-// parseUUID parses a UUID string (with or without dashes) into 16 bytes.
-func parseUUID(s string) ([16]byte, error) {
+// ParseUUID parses a UUID string (with or without dashes) into 16 bytes.
+func ParseUUID(s string) ([16]byte, error) {
 	var u [16]byte
 	clean := strings.ReplaceAll(s, "-", "")
 	if len(clean) != 32 {
@@ -49,8 +49,8 @@ func formatUUID(u [16]byte) string {
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
-// newUUIDv4 generates a random RFC 4122 version 4 UUID.
-func newUUIDv4() string {
+// NewUUIDv4 generates a random RFC 4122 version 4 UUID.
+func NewUUIDv4() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("crypto/rand unavailable: " + err.Error())

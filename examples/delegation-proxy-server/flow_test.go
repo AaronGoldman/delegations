@@ -12,7 +12,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/api"
+	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/delegation"
 )
+
+// Mirrors delegation.problemDetail for test assertions
+type testProblemDetail struct {
+	Type             string `json:"type"`
+	Title            string `json:"title,omitempty"`
+	Status           int    `json:"status,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	DelegationURL    string `json:"delegation_url,omitempty"`
+	DocumentationURL string `json:"documentation_url,omitempty"`
+}
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -26,22 +39,22 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatalf("generate delegation header key: %v", err)
 	}
 
-	store := NewInMemoryDelegationStore()
-	ss := &SessionsServer{delegationURLSecret: []byte(jwtSecret), idDerivationSecret: serverSecret, store: store}
+	store := delegation.NewInMemoryDelegationStore()
+	ss := &delegation.SessionsServer{
+		DelegationURLSecret: []byte(jwtSecret),
+		IdDerivationSecret:  serverSecret,
+		Store:               store,
+	}
 
 	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
 	srv.Start()
 
-	apiMux := newAuthMiddlewareMux(serverSecret, 10*time.Minute, []byte(jwtSecret), store, priv)
-	apiMux.HandleFunc("/api/whoami", newWhoamiHandler(pub), []string{"profile_view"})
+	authMux := delegation.NewAuthMiddlewareMux(serverSecret, 10*time.Minute, []byte(jwtSecret), store, priv)
+	api.Register(authMux, pub)
 
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("/delegate", ss.showGrantUI)
-	mux.HandleFunc("/grant",    ss.processGrant)
-	mux.HandleFunc("/sessions", ss.listGrants)
-	mux.HandleFunc("/revoke",   ss.revokeGrant)
-	mux.Handle("/api/", apiMux)
+	ss.RegisterHandlers(mux)
+	mux.Handle("/api/", authMux)
 
 	srv.Config.Handler = mux
 	t.Cleanup(srv.Close)
@@ -50,13 +63,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 // TestDelegationFlow exercises the full happy path:
 //
-//  1. GET /api/whoami (no cookies) → 401 + delegation_url
-//  2. GET /delegate?token=…        → HTML grant approval form
-//  3. POST /delegate/grant         → grant created, "Access Granted" page
-//  4. GET /sessions                → HTML page listing the new grant with a Revoke button
-//  5. GET /api/whoami (with cookies) → 200 with full identity JSON
-//  6. POST /sessions/revoke        → grant revoked, redirect to /sessions
-//  7. GET /api/whoami              → 401 again (grant is gone)
+//	1. GET /api/whoami (no cookies) → 401 + delegation_url
+//	2. GET /delegate?token=…        → HTML grant approval form
+//	3. POST /delegate/grant         → grant created, "Access Granted" page
+//	4. GET /sessions                → HTML page listing the new grant with a Revoke button
+//	5. GET /api/whoami (with cookies) → 200 with full identity JSON
+//	6. POST /sessions/revoke        → grant revoked, redirect to /sessions
+//	7. GET /api/whoami              → 401 again (grant is gone)
 func TestDelegationFlow(t *testing.T) {
 	srv := newTestServer(t)
 	jar, err := cookiejar.New(nil)
@@ -79,7 +92,7 @@ func TestDelegationFlow(t *testing.T) {
 		t.Fatalf("step 1: want Content-Type application/problem+json, got %q", ct)
 	}
 
-	var prob problemDetail
+	var prob testProblemDetail
 	if err := json.NewDecoder(resp1.Body).Decode(&prob); err != nil {
 		t.Fatalf("step 1: decode problem+json: %v", err)
 	}
@@ -140,7 +153,7 @@ func TestDelegationFlow(t *testing.T) {
 		t.Fatalf("step 3: expected 'Access Granted' in body, got: %s", body3)
 	}
 
-	// ── Step 4: GET /sessions → JSON array of active grants ────────────────
+	// ── Step 4: GET /sessions → HTML page listing active grants ────────────
 	resp4, err := client.Get(srv.URL + "/sessions")
 	if err != nil {
 		t.Fatalf("step 4: %v", err)
@@ -168,7 +181,7 @@ func TestDelegationFlow(t *testing.T) {
 	if resp5.StatusCode != http.StatusOK {
 		t.Fatalf("step 5: want 200, got %d", resp5.StatusCode)
 	}
-	var whoami Delegation
+	var whoami delegation.Delegation
 	if err := json.NewDecoder(resp5.Body).Decode(&whoami); err != nil {
 		t.Fatalf("step 5: decode whoami JSON: %v", err)
 	}
@@ -184,9 +197,9 @@ func TestDelegationFlow(t *testing.T) {
 	if whoami.PrincipalID == "" {
 		t.Fatal("step 5: principal_id is empty")
 	}
-	// delegation_uuid should appear in the sessions HTML (revoke form hidden input).
+	// delegation_id should appear in the sessions HTML (revoke form hidden input).
 	if !strings.Contains(string(body4), whoami.DelegationID) {
-		t.Fatalf("step 5: delegation_uuid %q not found in sessions HTML", whoami.DelegationID)
+		t.Fatalf("step 5: delegation_id %q not found in sessions HTML", whoami.DelegationID)
 	}
 
 	// ── Step 6: POST /sessions/revoke → grant revoked, redirect to /sessions ─

@@ -29,13 +29,9 @@ import (
 	"os"
 	"strings"
 	"time"
-)
 
-const (
-	agentCookieName     = "agent_cookie"
-	sessionCookieName   = "session_cookie"
-	principalCookieName = "principal_cookie"
-	delegationPath      = "/delegate"
+	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/api"
+	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/delegation"
 )
 
 func main() {
@@ -51,7 +47,7 @@ func main() {
 
 	delegationURLSecret := cfg["delegation_url_secret"]
 	idDerivationSecret := cfg["id_derivation_secret"]
-	if _, err := parseUUID(idDerivationSecret); err != nil {
+	if _, err := delegation.ParseUUID(idDerivationSecret); err != nil {
 		log.Fatalf("id_derivation_secret is not a valid UUID: %v", err)
 	}
 
@@ -67,22 +63,34 @@ func main() {
 	delegationHeaderKey := ed25519.PrivateKey(keyBytes)
 	delegationHeaderPub := delegationHeaderKey.Public().(ed25519.PublicKey)
 
-	store  := NewInMemoryDelegationStore()
+	// Set up delegation infrastructure
+	store := delegation.NewInMemoryDelegationStore()
 	secret := []byte(delegationURLSecret)
 
-	ss     := &SessionsServer{delegationURLSecret: secret, idDerivationSecret: idDerivationSecret, store: store}
-	apiMux := newAuthMiddlewareMux(idDerivationSecret, 10*time.Minute, secret, store, delegationHeaderKey)
-	apiMux.HandleFunc("/api/whoami", newWhoamiHandler(delegationHeaderPub), []string{"profile_view"})
+	ss := &delegation.SessionsServer{
+		DelegationURLSecret: secret,
+		IdDerivationSecret:  idDerivationSecret,
+		Store:               store,
+	}
 
+	authMux := delegation.NewAuthMiddlewareMux(
+		idDerivationSecret,
+		10*time.Minute,
+		secret,
+		store,
+		delegationHeaderKey,
+	)
+
+	// Register API routes (wrapped in authMux)
+	api.Register(authMux, delegationHeaderPub)
+
+	// Wire everything together
 	mux := http.NewServeMux()
-	mux.HandleFunc("/delegate", ss.showGrantUI)
-	mux.HandleFunc("/grant",    ss.processGrant)
-	mux.HandleFunc("/sessions", ss.listGrants)
-	mux.HandleFunc("/revoke",   ss.revokeGrant)
-	mux.Handle("/api/", apiMux)
+	ss.RegisterHandlers(mux)
+	mux.Handle("/api/", authMux)
 
-	baseURL    := "http://" + listenAddr
-	port       := listenAddr[strings.LastIndex(listenAddr, ":"):]
+	baseURL := "http://" + listenAddr
+	port := listenAddr[strings.LastIndex(listenAddr, ":"):]
 	stagingURL := "http://staging.localhost" + port
 	log.Printf("delegation-proxy-server listening on %s", baseURL)
 	log.Printf("  GET  %s/api/whoami       — protected demo endpoint", baseURL)
@@ -125,7 +133,7 @@ func loadOrCreateConfig(path string) (map[string]string, error) {
 
 // writeDefaultConfig writes a config.json with localhost defaults and all random secrets.
 func writeDefaultConfig(path string) error {
-	urlSecret, err := randomHex(32) // 256-bit HS256 key
+	urlSecret, err := delegation.RandomHex(32) // 256-bit HS256 key
 	if err != nil {
 		return fmt.Errorf("generate delegation_url_secret: %w", err)
 	}
@@ -135,7 +143,7 @@ func writeDefaultConfig(path string) error {
 	}
 	return writeConfig(path, map[string]string{
 		"delegation_url_secret": urlSecret,
-		"id_derivation_secret":  newUUIDv4(),
+		"id_derivation_secret":  delegation.NewUUIDv4(),
 		"delegation_header_key": hex.EncodeToString([]byte(priv)),
 	})
 }
@@ -155,7 +163,7 @@ func ensureConfigSecrets(cfg map[string]string, path string) error {
 	updated := false
 
 	if cfg["delegation_url_secret"] == "" {
-		secret, err := randomHex(32)
+		secret, err := delegation.RandomHex(32)
 		if err != nil {
 			return fmt.Errorf("generate delegation_url_secret: %w", err)
 		}
@@ -165,7 +173,7 @@ func ensureConfigSecrets(cfg map[string]string, path string) error {
 	}
 
 	if cfg["id_derivation_secret"] == "" {
-		cfg["id_derivation_secret"] = newUUIDv4()
+		cfg["id_derivation_secret"] = delegation.NewUUIDv4()
 		updated = true
 		log.Printf("Generated id_derivation_secret")
 	}

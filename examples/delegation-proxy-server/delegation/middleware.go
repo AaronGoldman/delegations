@@ -1,4 +1,4 @@
-package main
+package delegation
 
 import (
 	_ "embed"
@@ -12,7 +12,15 @@ import (
 	"time"
 )
 
-// GetAuthInfo reads and verifies the X-Delegation header set by authMiddlewareMux.
+// Cookie and endpoint name constants
+const (
+	agentCookieName     = "agent_cookie"
+	sessionCookieName   = "session_cookie"
+	principalCookieName = "principal_cookie"
+	delegationPath      = "/delegate"
+)
+
+// GetAuthInfo reads and verifies the X-Delegation header set by AuthMiddlewareMux.
 // Returns nil if the header is missing or the Ed25519 signature is invalid.
 func GetAuthInfo(r *http.Request, pubKey ed25519.PublicKey) *Delegation {
 	token := r.Header.Get("X-Delegation")
@@ -49,9 +57,9 @@ var helpHTML string
 
 var helpTemplate = template.Must(template.New("help").Parse(helpHTML))
 
-// authMiddlewareMux wraps http.ServeMux so that each HandleFunc call carries
+// AuthMiddlewareMux wraps http.ServeMux so that each HandleFunc call carries
 // the required scopes for that endpoint. Auth is enforced per-handler.
-type authMiddlewareMux struct {
+type AuthMiddlewareMux struct {
 	mux                 *http.ServeMux
 	idDerivationSecret  string
 	tokenTTL            time.Duration
@@ -60,8 +68,9 @@ type authMiddlewareMux struct {
 	delegationHeaderKey ed25519.PrivateKey
 }
 
-func newAuthMiddlewareMux(idDerivationSecret string, tokenTTL time.Duration, delegationURLSecret []byte, store DelegationStore, delegationHeaderKey ed25519.PrivateKey) *authMiddlewareMux {
-	return &authMiddlewareMux{
+// NewAuthMiddlewareMux creates a new authenticated middleware mux.
+func NewAuthMiddlewareMux(idDerivationSecret string, tokenTTL time.Duration, delegationURLSecret []byte, store DelegationStore, delegationHeaderKey ed25519.PrivateKey) *AuthMiddlewareMux {
+	return &AuthMiddlewareMux{
 		mux:                 http.NewServeMux(),
 		idDerivationSecret:  idDerivationSecret,
 		tokenTTL:            tokenTTL,
@@ -75,7 +84,7 @@ func newAuthMiddlewareMux(idDerivationSecret string, tokenTTL time.Duration, del
 // requiring the grant to cover all scopes before the handler is called.
 // Requests with ?h=true or ?help=true are intercepted and return a human-readable
 // HTML page describing the endpoint's host, path, and required scopes.
-func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, scopes []string) {
+func (m *AuthMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, scopes []string) {
 	m.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("h") == "true" || q.Get("help") == "true" {
@@ -89,7 +98,7 @@ func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 		if agentC == nil || sessionC == nil {
 			var agentVal, sessionVal string
 			if agentC == nil {
-				agentVal = newUUIDv4()
+				agentVal = NewUUIDv4()
 				http.SetCookie(w, &http.Cookie{
 					Name:     agentCookieName,
 					Value:    agentVal,
@@ -103,7 +112,7 @@ func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 				agentVal = agentC.Value
 			}
 			if sessionC == nil {
-				sessionVal = newUUIDv4()
+				sessionVal = NewUUIDv4()
 				setSessionCookie(w, sessionVal)
 			} else {
 				sessionVal = sessionC.Value
@@ -161,13 +170,14 @@ func (m *authMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 	})
 }
 
-func (m *authMiddlewareMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP implements http.Handler.
+func (m *AuthMiddlewareMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mux.ServeHTTP(w, r)
 }
 
 // writeHelpPage returns a human-readable HTML page describing the endpoint's
 // requirements: host, path, and required scopes.
-func (m *authMiddlewareMux) writeHelpPage(w http.ResponseWriter, r *http.Request, path string, scopes []string) {
+func (m *AuthMiddlewareMux) writeHelpPage(w http.ResponseWriter, r *http.Request, path string, scopes []string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := helpTemplate.Execute(w, helpPageData{
 		Host:   r.Host,
@@ -177,7 +187,6 @@ func (m *authMiddlewareMux) writeHelpPage(w http.ResponseWriter, r *http.Request
 		log.Printf("ERROR rendering help page: %v", err)
 	}
 }
-
 
 func setSessionCookie(w http.ResponseWriter, val string) {
 	http.SetCookie(w, &http.Cookie{
@@ -194,7 +203,7 @@ func setSessionCookie(w http.ResponseWriter, val string) {
 // writeDelegationError writes an RFC 7807 delegation-required 401 response.
 // scopes is the set required by this endpoint and is embedded in the JWT so
 // the grant UI can display them.
-func (m *authMiddlewareMux) writeDelegationError(w http.ResponseWriter, r *http.Request, agentID, sessionID string, scopes []string) {
+func (m *AuthMiddlewareMux) writeDelegationError(w http.ResponseWriter, r *http.Request, agentID, sessionID string, scopes []string) {
 	token, err := (Delegation{
 		AgentID:     agentID,
 		SessionID:   sessionID,

@@ -1,4 +1,4 @@
-package main
+package delegation
 
 import (
 	_ "embed"
@@ -15,9 +15,9 @@ import (
 // GET  /sessions  — list active delegations
 // POST /revoke    — revoke a delegation
 type SessionsServer struct {
-	delegationURLSecret []byte
-	idDerivationSecret  string
-	store               DelegationStore
+	DelegationURLSecret []byte
+	IdDerivationSecret  string
+	Store               DelegationStore
 }
 
 var tmplFuncs = template.FuncMap{
@@ -153,14 +153,14 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing token parameter", http.StatusBadRequest)
 		return
 	}
-	claims, err := DelegationFromJWT(s.delegationURLSecret, token)
+	claims, err := DelegationFromJWT(s.DelegationURLSecret, token)
 	if err != nil {
 		http.Error(w, "invalid or expired delegation token: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Issue or refresh the principal_cookie — identifies the human approving the grant.
-	principalVal := newUUIDv4()
+	principalVal := NewUUIDv4()
 	if c, _ := r.Cookie(principalCookieName); c != nil {
 		principalVal = c.Value
 	}
@@ -173,14 +173,14 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   365 * 24 * 60 * 60, // 1 year, refreshed on each visit
 	})
-	principalID, err := deriveID(s.idDerivationSecret, principalVal)
+	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	csrfToken, err := randomHex(16)
+	csrfToken, err := RandomHex(16)
 	if err != nil {
 		log.Printf("ERROR generating CSRF token: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -234,7 +234,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	action := r.FormValue("action")
 	duration := r.FormValue("duration")
 
-	claims, err := DelegationFromJWT(s.delegationURLSecret, token)
+	claims, err := DelegationFromJWT(s.DelegationURLSecret, token)
 	if err != nil {
 		http.Error(w, "invalid or expired delegation token: "+err.Error(), http.StatusBadRequest)
 		return
@@ -262,7 +262,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	if c, _ := r.Cookie(principalCookieName); c != nil {
 		principalVal = c.Value
 	}
-	principalID, err := deriveID(s.idDerivationSecret, principalVal)
+	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -299,11 +299,11 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		claims.PathPattern = pp
 	}
 
-	claims.DelegationID = newUUIDv4()
+	claims.DelegationID = NewUUIDv4()
 	claims.PrincipalID  = principalID
 	claims.Duration     = duration
 
-	if err := s.store.AddDelegation(*claims); err != nil {
+	if err := s.Store.AddDelegation(*claims); err != nil {
 		log.Printf("ERROR AddDelegation: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -336,7 +336,7 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	csrfToken, err := randomHex(16)
+	csrfToken, err := RandomHex(16)
 	if err != nil {
 		log.Printf("ERROR generating CSRF token: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -352,7 +352,7 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   600,
 	})
 
-	delegations, err := s.store.ListDelegations()
+	delegations, err := s.Store.ListDelegations()
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -389,7 +389,7 @@ func (s *SessionsServer) revokeGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.RevokeDelegation(delegationID); err != nil {
+	if err := s.Store.RevokeDelegation(delegationID); err != nil {
 		log.Printf("ERROR RevokeDelegation(%s): %v", delegationID, err)
 		http.Error(w, "delegation not found", http.StatusNotFound)
 		return
@@ -397,4 +397,13 @@ func (s *SessionsServer) revokeGrant(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("REVOKE delegation=%s", delegationID)
 	http.Redirect(w, r, "/sessions", http.StatusSeeOther)
+}
+
+// RegisterHandlers registers all SessionsServer handlers into the given mux.
+// This includes /delegate, /grant, /sessions, and /revoke endpoints.
+func (s *SessionsServer) RegisterHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/delegate", s.showGrantUI)
+	mux.HandleFunc("/grant", s.processGrant)
+	mux.HandleFunc("/sessions", s.listGrants)
+	mux.HandleFunc("/revoke", s.revokeGrant)
 }
