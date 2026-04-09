@@ -115,50 +115,31 @@ func (m *AuthMiddlewareMux) RegisterSessionHandlers(ss *SessionsServer) {
 	ss.RegisterHandlers(m.mux)
 }
 
-// HandleFunc registers handler at path, enforcing delegated-access auth and
-// requiring the grant to cover all scopes before the handler is called.
-// Requests with ?h=true or ?help=true are intercepted and return a human-readable
-// HTML page describing the endpoint's host, path, and required scopes.
+// HandleFunc registers handler at path, enforcing delegated-access auth with required scopes.
+// Requests with ?h=true or ?help=true return a human-readable help page.
 func (m *AuthMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, scopes []string) {
-	m.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if q.Get("h") == "true" || q.Get("help") == "true" {
-			m.writeHelpPage(w, r, path, scopes)
+	m.mux.HandleFunc(path, m.authMiddleware(handler, scopes))
+}
+
+// authMiddleware wraps a handler with delegation auth enforcement.
+// Checks cookies, validates grants, sets X-Delegation header, and revokes "once" grants.
+func (m *AuthMiddlewareMux) authMiddleware(handler http.HandlerFunc, scopes []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Help request
+		if q := r.URL.Query(); q.Get("h") == "true" || q.Get("help") == "true" {
+			m.writeHelpPage(w, r, r.URL.Path, scopes)
 			return
 		}
 
+		// Get or create agent/session cookies
 		agentC, _ := r.Cookie(agentCookieName)
 		sessionC, _ := r.Cookie(sessionCookieName)
-
 		if agentC == nil || sessionC == nil {
-			var agentVal, sessionVal string
-			if agentC == nil {
-				agentVal = NewUUIDv4()
-				http.SetCookie(w, &http.Cookie{
-					Name:     agentCookieName,
-					Value:    agentVal,
-					HttpOnly: true,
-					Secure:   true,
-					SameSite: http.SameSiteLaxMode,
-					MaxAge:   365 * 24 * 60 * 60, // 1 year
-					Path:     "/",
-				})
-			} else {
-				agentVal = agentC.Value
-			}
-			if sessionC == nil {
-				sessionVal = NewUUIDv4()
-				setSessionCookie(w, sessionVal)
-			} else {
-				sessionVal = sessionC.Value
-			}
-			agentID, _ := deriveID(m.idDerivationSecret, agentVal)
-			sessionID, _ := deriveID(m.idDerivationSecret, sessionVal)
-			log.Printf("ISSUE agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
-			m.writeDelegationError(w, r, agentID, sessionID, scopes)
+			m.issueDelegation(w, r, agentC, sessionC, scopes)
 			return
 		}
 
+		// Derive IDs from cookies
 		agentID, err := deriveID(m.idDerivationSecret, agentC.Value)
 		if err != nil {
 			log.Printf("ERROR deriveID(agent): %v", err)
@@ -172,6 +153,7 @@ func (m *AuthMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 			return
 		}
 
+		// Find matching delegation
 		delegation, ok, err := m.store.FindMatching(agentID, sessionID, r.Host, r.URL.Path, r.Method, scopes)
 		if err != nil {
 			log.Printf("ERROR FindMatching: %v", err)
@@ -180,18 +162,17 @@ func (m *AuthMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 		}
 		if !ok {
 			log.Printf("DENY  agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
-			setSessionCookie(w, sessionC.Value) // rolling session
+			setSessionCookie(w, sessionC.Value)
 			m.writeDelegationError(w, r, agentID, sessionID, scopes)
 			return
 		}
 
+		// Allowed: sign header token and call handler
 		log.Printf("ALLOW agent=%s session=%s delegation=%s %s %s%s",
 			agentID, sessionID, delegation.DelegationID, r.Method, r.Host, r.URL.Path)
 
 		if delegation.Duration == "once" {
-			if err := m.store.RevokeDelegation(delegation.DelegationID); err != nil {
-				log.Printf("ERROR revoking once delegation %s: %v", delegation.DelegationID, err)
-			}
+			m.store.RevokeDelegation(delegation.DelegationID)
 		}
 
 		token, err := delegation.SignedJWT(m.delegationHeaderKey)
@@ -202,100 +183,50 @@ func (m *AuthMiddlewareMux) HandleFunc(path string, handler http.HandlerFunc, sc
 		}
 		r.Header.Set("X-Delegation", token)
 		handler(w, r)
-	})
+	}
+}
+
+// issueDelegation creates agent/session cookies and requests delegation.
+func (m *AuthMiddlewareMux) issueDelegation(w http.ResponseWriter, r *http.Request, agentC, sessionC *http.Cookie, scopes []string) {
+	var agentVal, sessionVal string
+
+	if agentC == nil {
+		agentVal = NewUUIDv4()
+		http.SetCookie(w, &http.Cookie{
+			Name:     agentCookieName,
+			Value:    agentVal,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   365 * 24 * 60 * 60,
+			Path:     "/",
+		})
+	} else {
+		agentVal = agentC.Value
+	}
+
+	if sessionC == nil {
+		sessionVal = NewUUIDv4()
+		setSessionCookie(w, sessionVal)
+	} else {
+		sessionVal = sessionC.Value
+	}
+
+	agentID, _ := deriveID(m.idDerivationSecret, agentVal)
+	sessionID, _ := deriveID(m.idDerivationSecret, sessionVal)
+	log.Printf("ISSUE agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
+	m.writeDelegationError(w, r, agentID, sessionID, scopes)
 }
 
 // Handle registers a handler at path with the given required scopes.
 // The handler is wrapped to enforce delegation-based auth before execution.
 func (m *AuthMiddlewareMux) Handle(path string, handler http.Handler, scopes []string) {
-	m.mux.Handle(path, m.wrapHandler(handler, scopes))
-}
-
-// wrapHandler wraps an http.Handler with delegation auth enforcement and scope validation.
-func (m *AuthMiddlewareMux) wrapHandler(handler http.Handler, scopes []string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if q.Get("h") == "true" || q.Get("help") == "true" {
-			m.writeHelpPage(w, r, r.URL.Path, scopes)
-			return
+	m.mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerFunc := func(w http.ResponseWriter, r *http.Request) {
+			handler.ServeHTTP(w, r)
 		}
-
-		agentC, _ := r.Cookie(agentCookieName)
-		sessionC, _ := r.Cookie(sessionCookieName)
-
-		if agentC == nil || sessionC == nil {
-			var agentVal, sessionVal string
-			if agentC == nil {
-				agentVal = NewUUIDv4()
-				http.SetCookie(w, &http.Cookie{
-					Name:     agentCookieName,
-					Value:    agentVal,
-					HttpOnly: true,
-					Secure:   true,
-					SameSite: http.SameSiteLaxMode,
-					MaxAge:   365 * 24 * 60 * 60, // 1 year
-					Path:     "/",
-				})
-			} else {
-				agentVal = agentC.Value
-			}
-			if sessionC == nil {
-				sessionVal = NewUUIDv4()
-				setSessionCookie(w, sessionVal)
-			} else {
-				sessionVal = sessionC.Value
-			}
-			agentID, _ := deriveID(m.idDerivationSecret, agentVal)
-			sessionID, _ := deriveID(m.idDerivationSecret, sessionVal)
-			log.Printf("ISSUE agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
-			m.writeDelegationError(w, r, agentID, sessionID, scopes)
-			return
-		}
-
-		agentID, err := deriveID(m.idDerivationSecret, agentC.Value)
-		if err != nil {
-			log.Printf("ERROR deriveID(agent): %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		sessionID, err := deriveID(m.idDerivationSecret, sessionC.Value)
-		if err != nil {
-			log.Printf("ERROR deriveID(session): %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		delegation, ok, err := m.store.FindMatching(agentID, sessionID, r.Host, r.URL.Path, r.Method, scopes)
-		if err != nil {
-			log.Printf("ERROR FindMatching: %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if !ok {
-			log.Printf("DENY  agent=%s session=%s %s %s%s", agentID, sessionID, r.Method, r.Host, r.URL.Path)
-			setSessionCookie(w, sessionC.Value) // rolling session
-			m.writeDelegationError(w, r, agentID, sessionID, scopes)
-			return
-		}
-
-		log.Printf("ALLOW agent=%s session=%s delegation=%s %s %s%s",
-			agentID, sessionID, delegation.DelegationID, r.Method, r.Host, r.URL.Path)
-
-		if delegation.Duration == "once" {
-			if err := m.store.RevokeDelegation(delegation.DelegationID); err != nil {
-				log.Printf("ERROR revoking once delegation %s: %v", delegation.DelegationID, err)
-			}
-		}
-
-		token, err := delegation.SignedJWT(m.delegationHeaderKey)
-		if err != nil {
-			log.Printf("ERROR SignedJWT: %v", err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		r.Header.Set("X-Delegation", token)
-		handler.ServeHTTP(w, r)
-	})
+		m.authMiddleware(handlerFunc, scopes)(w, r)
+	}))
 }
 
 // ServeHTTP implements http.Handler.

@@ -63,22 +63,18 @@ type delegatePageData struct {
 //	"sub.example.com"           → ["sub.example.com", "*.example.com"]
 //	"a.b.example.com"           → ["a.b.example.com", "*.b.example.com", "*.example.com"]
 func hostScopeOptions(host string) []string {
-	// Separate port so it doesn't fuse with the last label during splitting.
 	hostname, port, hasPort := strings.Cut(host, ":")
 	portSuffix := ""
 	if hasPort {
 		portSuffix = ":" + port
 	}
 
-	base := hostname
-	if strings.HasPrefix(base, "*.") {
-		base = base[2:]
-	}
+	base := strings.TrimPrefix(hostname, "*.")
 	labels := strings.Split(base, ".")
 	options := []string{host}
+
+	// Generate wildcard variants (skip bare TLD for 3+ labels)
 	for i := 1; i < len(labels); i++ {
-		// For multi-label domains (3+ labels) skip the bare-TLD level (e.g. "*.com").
-		// For short dev host names like "staging.localhost" (2 labels), allow "*.localhost".
 		if i == len(labels)-1 && len(labels) > 2 {
 			break
 		}
@@ -97,51 +93,39 @@ func pathScopeOptions(path string) []string {
 	if path == "" {
 		return nil
 	}
-	normalized := path
-	if strings.HasSuffix(normalized, "/*") {
-		normalized = normalized[:len(normalized)-2]
+
+	// Normalize: remove trailing "/*" and handle root case
+	norm := strings.TrimSuffix(path, "/*")
+	if norm == "" {
+		norm = "/"
 	}
-	if normalized == "" {
-		normalized = "/"
-	}
+
+	// Split into segments, skipping empty
 	var segments []string
-	if normalized != "/" {
-		for _, s := range strings.Split(normalized, "/") {
+	if norm != "/" {
+		for _, s := range strings.Split(norm, "/") {
 			if s != "" {
 				segments = append(segments, s)
 			}
 		}
 	}
+
 	options := []string{path}
+	seen := map[string]bool{path: true}
+
+	// Generate wider scopes
 	for i := len(segments) - 1; i >= 0; i-- {
 		prefix := "/" + strings.Join(segments[:i], "/")
-		var w string
+		w := prefix + "/*"
 		if prefix == "/" {
 			w = "/*"
-		} else {
-			w = prefix + "/*"
 		}
-		seen := false
-		for _, o := range options {
-			if o == w {
-				seen = true
-				break
-			}
-		}
-		if !seen {
+		if !seen[w] {
 			options = append(options, w)
+			seen[w] = true
 		}
 	}
-	hasStar := false
-	for _, o := range options {
-		if o == "/*" {
-			hasStar = true
-			break
-		}
-	}
-	if !hasStar {
-		options = append(options, "/*")
-	}
+
 	return options
 }
 
