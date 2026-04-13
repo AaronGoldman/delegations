@@ -18,7 +18,7 @@ type Delegation struct {
 	// Set at approval time; absent from the JWT payload.
 	DelegationID string `json:"delegation_id,omitempty"`
 	PrincipalID  string `json:"principal_id,omitempty"`
-	Duration     string `json:"duration,omitempty"` // "once" | "session" | "agent"
+	Breadth      string `json:"breadth,omitempty"` // "once" | "session" | "agent"
 
 	// JWT claims (spec §5.1).
 	AgentID     string   `json:"agent_id"`

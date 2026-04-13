@@ -40,7 +40,7 @@ func main() {
 	log.Printf("  GET  %s/api/whoami                 — protected demo endpoint (subdomain)", stagingURL)
 	log.Printf("  GET  %s/delegations/ask?token=…   — grant approval UI", baseURL)
 	log.Printf("  GET  %s/delegations                — list active grants", baseURL)
-	log.Printf("  GET  %s/delegations/key            — Ed25519 public key for verifying signatures", baseURL)
+	log.Printf("  GET  %s/delegations/key            — Ed25519 public key for Authorization: Bearer", baseURL)
 
 	srv := &http.Server{
 		Addr:         listenAddr,

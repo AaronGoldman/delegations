@@ -71,8 +71,8 @@ This specification defines:
 ### 3.2 Communication Diagram
 
 ```
-┌───────┐                    ┌───────────┐                    ┌────────┐
-│ Agent │                    │ Principal │                    │ Server │
+┌───────┐                    ┌───────────┐                   ┌────────┐
+│ Agent │                    │ Principal │                   │ Server │
 └───┬───┘                    └─────┬─────┘                   └────┬───┘
     │                              │                              │
     │ 1) Try to access API         |                              │
@@ -102,7 +102,7 @@ This specification defines:
     │─────────────────────────────────────────────────────────── >│
     │                              │                              │
     │ 10) 200 Success              │                              │
-    │< ───────────────────────────────────────────────────────────│
+    │< ───────────────────────────────────────────────────────────│     │                              │                              │
 ```
 
 ### 3.3 Complete HTTP Trace Example
@@ -164,13 +164,13 @@ Set-Cookie: csrf_token=9f8e7d6c5b4a3210; HttpOnly; Secure; SameSite=Strict; Path
 <p><strong>Resource:</strong> api.example.com/users/123/messages</p>
 <p><strong>Method:</strong> GET</p>
 <p><strong>Scope:</strong> READ_DM - Read direct messages you've received</p>
-<form method="POST" action="/delegate/grant">
+<form method="POST" action="/delegations/grant">
 <input type="hidden" name="token" value="eyJhbGci...">
 <input type="hidden" name="csrf_token" value="9f8e7d6c5b4a3210">
-<p>Grant term:</p>
-<label><input type="radio" name="term" value="once" checked> One time only</label><br>
-<label><input type="radio" name="term" value="session"> This session</label><br>
-<label><input type="radio" name="term" value="agent"> All sessions for this agent</label><br>
+<p>Grant breadth:</p>
+<label><input type="radio" name="breadth" value="once" checked> One time only</label><br>
+<label><input type="radio" name="breadth" value="session"> This session</label><br>
+<label><input type="radio" name="breadth" value="agent"> All sessions for this agent</label><br>
 <p>Grant duration:</p>
 <label><input type="radio" name="ttl" value="4h" checked> 4 hours</label><br>
 <label><input type="radio" name="ttl" value="2d"> 2 days</label><br>
@@ -265,7 +265,7 @@ When the agent attempts to access a protected resource without valid authorizati
 
 ## 5. JWT Token Format
 
-The JWT in `delegation_url` is signed with HMAC-SHA256 or stronger by the API server and verified by the delegation page.
+The JWT in `delegation_url` is signed with HMAC-SHA256 or stronger by the API server and verified by the delegation page. This JWT is distinct from the delegation bearer token used by proxies in the `Authorization: Bearer` header (see [Delegation Bearer Token Specification](x-delegation-header.md)).
 
 ### 5.1 JWT Payload
 
@@ -316,8 +316,8 @@ CREATE TABLE delegations (
     methods      VARCHAR(10)[] NOT NULL,   -- ["GET", "POST"]
     scopes       VARCHAR(100)[] NOT NULL,  -- ["READ_DM", "SEND_DM"]
 
-    -- Grant term
-    term         VARCHAR(10) NOT NULL,     -- "once" | "session" | "agent"
+    -- Grant breadth
+    breadth      VARCHAR(10) NOT NULL,     -- "once" | "session" | "agent"
 
     -- Lifecycle
     ttl          VARCHAR(20) NOT NULL,     -- "4h" | "2d" | "90d" | "400d" | "indefinite"
@@ -353,10 +353,10 @@ When a request arrives with agent_cookie and session_cookie:
      AND (expires_at IS NULL OR expires_at > NOW())
    ```
 
-   Note: the query filters only on `agent_id`. The session match is applied in step 3 because `"agent"` term delegations are intentionally session-independent.
+   Note: the query filters only on `agent_id`. The session match is applied in step 3 because `"agent"` breadth delegations are intentionally session-independent.
 
 3. **For each delegation, check if request matches:**
-   - **Session check**: if `term != "agent"`, the delegation's `session_id` MUST equal the request's derived `session_id`
+   - **Session check**: if `breadth != "agent"`, the delegation's `session_id` MUST equal the request's derived `session_id`
    - **Host matches** host_pattern (exact or wildcard `*.example.com`)
    - **Path matches** path_pattern (exact or wildcard `/users/*`)
    - **Request method** is in methods array
@@ -364,9 +364,9 @@ When a request arrives with agent_cookie and session_cookie:
 
 4. **If ANY delegation matches → ALLOW the request**
    - Update `last_used_at = NOW()` for the matched delegation
-   - If `term = "once"`, immediately revoke the delegation after use
+   - If `breadth = "once"`, immediately revoke the delegation after use
 
-### 6.3 Grant Term Semantics
+### 6.3 Grant Breadth Semantics
 
 - **`"once"`** — Single-use. The delegation is revoked immediately after the first successful use. Requires both `agent_id` and `session_id` to match.
 - **`"session"`** — Valid for the lifetime of the current session. Requires both `agent_id` and `session_id` to match. The delegation expires when the session ends (or when its TTL elapses, whichever comes first).
@@ -504,11 +504,11 @@ session_cookie should have no expiration (expires when browser closes)
 
 ### A.3 Grant Expansion Options
 
-When the principal visits the delegation URL, they can broaden the grant along two independent axes: **scope** and **TTL**.
+When the principal visits the delegation URL, they can broaden the grant along two independent axes: **breadth** and **TTL**.
 
-**Term (who the grant applies to):**
+**Breadth (who the grant applies to):**
 
-| Term | Match condition | Default |
+| Breadth | Match condition | Default |
 |---|---|---|
 | `"once"` | agent_id + session_id, single use | Narrowest |
 | `"session"` | agent_id + session_id, until session ends or TTL elapses | — |
@@ -520,9 +520,9 @@ When the principal visits the delegation URL, they can broaden the grant along t
 - Methods: `GET` → `GET, POST` → all methods
 
 **TTL (how long the grant lasts):**
-Presented in order from the `ttl` array in the JWT (or the default list if absent). First entry is pre-selected. TTL is independent of scope — a `"session"` scope delegation may have a `"90d"` TTL, meaning it is valid for 90 days but only while the original session cookie is presented.
+Presented in order from the `ttl` array in the JWT (or the default list if absent). First entry is pre-selected. TTL is independent of breadth — a `"session"` breadth delegation may have a `"90d"` TTL, meaning it is valid for 90 days but only while the original session cookie is presented.
 
-Note: For `"once"` term, TTL is not meaningful since the delegation is consumed on first use. Implementations MAY hide the TTL selector when `"once"` is selected.
+Note: For `"once"` breadth, TTL is not meaningful since the delegation is consumed on first use. Implementations MAY hide the TTL selector when `"once"` is selected.
 
 ### A.4 Scope Documentation
 

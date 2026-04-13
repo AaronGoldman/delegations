@@ -50,13 +50,21 @@ const (
 	delegationPath      = "/delegations/ask"
 )
 
-// GetAuthInfo reads and verifies the X-Delegation header set by AuthMiddlewareMux.
+// GetAuthInfo reads and verifies the Authorization: Bearer header set by AuthMiddlewareMux.
 // Returns nil if the header is missing or the Ed25519 signature is invalid.
 func GetAuthInfo(r *http.Request, pubKey ed25519.PublicKey) *Delegation {
-	token := r.Header.Get("X-Delegation")
-	if token == "" {
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
 		return nil
 	}
+
+	// Extract token from "Bearer <token>"
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil
+	}
+	token := parts[1]
+
 	d, err := DelegationFromSignedJWT(pubKey, token)
 	if err != nil {
 		log.Printf("GetAuthInfo: %v", err)
@@ -171,7 +179,7 @@ func (m *AuthMiddlewareMux) authMiddleware(handler http.HandlerFunc, scopes []st
 		log.Printf("ALLOW agent=%s session=%s delegation=%s %s %s%s",
 			agentID, sessionID, delegation.DelegationID, r.Method, r.Host, r.URL.Path)
 
-		if delegation.Duration == "once" {
+		if delegation.Breadth == "once" {
 			m.store.RevokeDelegation(delegation.DelegationID)
 		}
 
@@ -181,7 +189,7 @@ func (m *AuthMiddlewareMux) authMiddleware(handler http.HandlerFunc, scopes []st
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		r.Header.Set("X-Delegation", token)
+		r.Header.Set("Authorization", "Bearer "+token)
 		handler(w, r)
 	}
 }

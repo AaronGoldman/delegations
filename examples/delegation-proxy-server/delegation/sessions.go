@@ -11,11 +11,11 @@ import (
 	"strings"
 )
 
-// SessionsServer handles all human-facing UI endpoints:
-// GET  /delegations/ask   — delegation approval form
+// SessionsServer handles all human-facing UI endpoints for delegation approval:
+// GET  /delegations/ask   — show delegation approval form (breadth + TTL selection)
 // POST /delegations/grant — process the approval form
 // GET  /delegations       — list active delegations
-// GET  /delegations/key   — returns the public key for verifying X-Delegation headers
+// GET  /delegations/key   — returns the Ed25519 public key for verifying Authorization: Bearer headers
 // POST /delegations/revoke — revoke a delegation
 type SessionsServer struct {
 	DelegationURLSecret    []byte
@@ -220,7 +220,8 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 
 	token := r.FormValue("token")
 	action := r.FormValue("action")
-	duration := r.FormValue("duration")
+	breadth := r.FormValue("breadth")
+	ttl := r.FormValue("ttl")
 
 	claims, err := DelegationFromJWT(s.DelegationURLSecret, token)
 	if err != nil {
@@ -238,11 +239,19 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch duration {
+	switch breadth {
 	case "once", "session", "agent":
 		// valid
 	default:
-		http.Error(w, "invalid duration", http.StatusBadRequest)
+		http.Error(w, "invalid breadth", http.StatusBadRequest)
+		return
+	}
+
+	switch ttl {
+	case "4h", "2d", "90d", "400d", "indefinite":
+		// valid
+	default:
+		http.Error(w, "invalid ttl", http.StatusBadRequest)
 		return
 	}
 
@@ -289,7 +298,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 
 	claims.DelegationID = NewUUIDv4()
 	claims.PrincipalID  = principalID
-	claims.Duration     = duration
+	claims.Breadth      = breadth
 
 	if err := s.Store.AddDelegation(*claims); err != nil {
 		log.Printf("ERROR AddDelegation: %v", err)
@@ -297,10 +306,10 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("GRANT agent=%s session=%s %s %s%s duration=%s delegation=%s",
+	log.Printf("GRANT agent=%s session=%s %s %s%s breadth=%s delegation=%s",
 		claims.AgentID, claims.SessionID,
 		strings.Join(claims.Methods, ","), claims.HostPattern, claims.PathPattern,
-		claims.Duration, claims.DelegationID)
+		claims.Breadth, claims.DelegationID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(grantedPage)

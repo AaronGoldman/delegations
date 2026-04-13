@@ -136,7 +136,8 @@ func TestDelegationFlow(t *testing.T) {
 		"token":      {token},
 		"csrf_token": {csrfToken},
 		"action":     {"approve"},
-		"duration":   {"session"},
+		"breadth":    {"session"},
+		"ttl":        {"4h"},
 	})
 	if err != nil {
 		t.Fatalf("step 3: %v", err)

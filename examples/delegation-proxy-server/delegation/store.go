@@ -33,7 +33,7 @@ func (s *InMemoryDelegationStore) FindMatching(agentID, sessionID, host, path, m
 		if d.AgentID != agentID {
 			continue
 		}
-		if d.Duration != "agent" && d.SessionID != sessionID {
+		if d.Breadth != "agent" && d.SessionID != sessionID {
 			continue
 		}
 		if d.matches(host, path, method, scopes) {

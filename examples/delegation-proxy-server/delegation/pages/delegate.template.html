@@ -73,18 +73,42 @@
   {{end}}
 
   <fieldset>
+    <legend>Grant breadth</legend>
+    <label>
+      <input type="radio" name="breadth" value="once" checked>
+      <strong>One time</strong> <small>— single use only</small>
+    </label>
+    <label>
+      <input type="radio" name="breadth" value="session">
+      <strong>This session</strong> <small>— valid for this session only</small>
+    </label>
+    <label>
+      <input type="radio" name="breadth" value="agent">
+      <strong>This agent</strong> <small>— valid across all sessions for this agent</small>
+    </label>
+  </fieldset>
+
+  <fieldset>
     <legend>Grant duration</legend>
     <label>
-      <input type="radio" name="duration" value="once" checked>
-      <strong>One time</strong> <small>— expires in 1 hour</small>
+      <input type="radio" name="ttl" value="4h" checked>
+      <strong>4 hours</strong>
     </label>
     <label>
-      <input type="radio" name="duration" value="session">
-      <strong>This session</strong> <small>— until the agent restarts</small>
+      <input type="radio" name="ttl" value="2d">
+      <strong>2 days</strong>
     </label>
     <label>
-      <input type="radio" name="duration" value="agent">
-      <strong>This agent</strong> <small>— across sessions, until manually revoked via /delegations</small>
+      <input type="radio" name="ttl" value="90d">
+      <strong>90 days</strong>
+    </label>
+    <label>
+      <input type="radio" name="ttl" value="400d">
+      <strong>400 days</strong>
+    </label>
+    <label>
+      <input type="radio" name="ttl" value="indefinite">
+      <strong>Indefinite</strong> <small>— until manually revoked</small>
     </label>
   </fieldset>
 
