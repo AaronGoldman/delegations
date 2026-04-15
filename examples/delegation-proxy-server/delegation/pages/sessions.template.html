@@ -24,7 +24,7 @@
 </style>
 </head>
 <body>
-<h1>Active Grants</h1>
+<h1>Active Grants for {{.PrincipalID}}</h1>
 <p class="subtitle">Grants that agents currently hold on your behalf.</p>
 
 {{if not .Grants}}
@@ -40,7 +40,7 @@
     <div class="scopes">{{range .Scopes}}<span class="scope">{{.}}</span>{{end}}</div>
     {{end}}
     <div class="meta">
-      delegation {{.DelegationID}} · {{.Breadth}}
+      {{.Breadth}} · {{timeRemaining .ExpiresAt}} remaining
     </div>
     <details>
       <summary>raw</summary>

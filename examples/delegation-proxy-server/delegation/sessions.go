@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // SessionsServer handles all human-facing UI endpoints for delegation approval:
@@ -29,6 +31,29 @@ var tmplFuncs = template.FuncMap{
 	"toJSON": func(v any) (string, error) {
 		b, err := json.MarshalIndent(v, "", "  ")
 		return string(b), err
+	},
+	"timeRemaining": func(expiresAt string) string {
+		t, err := time.Parse(time.RFC3339, expiresAt)
+		if err != nil {
+			return "unknown"
+		}
+		remaining := time.Until(t)
+		if remaining <= 0 {
+			return "expired"
+		}
+
+		// Format as "Xd Yh Zm" or simplify for short durations
+		days := int(remaining.Hours()) / 24
+		hours := int(remaining.Hours()) % 24
+		minutes := int(remaining.Minutes()) % 60
+
+		if days > 0 {
+			return fmt.Sprintf("%dd %dh", days, hours)
+		} else if hours > 0 {
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		} else {
+			return fmt.Sprintf("%dm", minutes)
+		}
 	},
 }
 
@@ -323,14 +348,23 @@ var sessionsHTML string
 var sessionsTemplate = template.Must(template.New("sessions").Funcs(tmplFuncs).Parse(sessionsHTML))
 
 type sessionsPageData struct {
-	Grants    []Delegation
-	CSRFToken string
+	PrincipalID string
+	Grants      []Delegation
+	CSRFToken   string
 }
 
 func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Extract principal ID from cookie
+	principalID := ""
+	if c, _ := r.Cookie(principalCookieName); c != nil {
+		if id, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
+			principalID = id
+		}
 	}
 
 	csrfToken, err := RandomHex(16)
@@ -356,7 +390,7 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := sessionsTemplate.Execute(w, sessionsPageData{Grants: delegations, CSRFToken: csrfToken}); err != nil {
+	if err := sessionsTemplate.Execute(w, sessionsPageData{PrincipalID: principalID, Grants: delegations, CSRFToken: csrfToken}); err != nil {
 		log.Printf("ERROR rendering sessions template: %v", err)
 	}
 }
