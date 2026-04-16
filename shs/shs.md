@@ -155,11 +155,14 @@ shs auth ls                            # list policies that apply to the current
 ### Daemon
 
 ```sh
-shs daemon                             # start with default ACL (~/.shs/acl.yaml)
+shs daemon                             # start with default ACL (~/.shs/acl.yaml), listen on port 443
 shs daemon --acl fingerprints.yaml     # specify ACL file
+shs daemon --port 8443                 # listen on a specific port (default: 443)
 shs daemon --webui                     # also enable the web UI
 shs daemon --dangerously-run-as-root   # allow running as root (not recommended)
 ```
+
+The daemon listens on port 443 by default (HTTPS). Use `--port` to bind to a different port. To bind port 443 as an unprivileged user, use `setcap cap_net_bind_service+ep /usr/local/bin/shs`.
 
 `shs auth ls` shows only policies that apply to the current OS user, in two sections. Group-inherited policies include the group name so the user knows which membership to revoke if they want to remove access.
 

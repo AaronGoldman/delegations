@@ -1,1 +1,8 @@
 config.json
+
+# http tool
+http/http
+http/cookies.sqlite3
+
+# macOS
+.DS_Store

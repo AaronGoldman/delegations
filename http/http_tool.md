@@ -58,16 +58,22 @@ The `http` tool reads HTTP requests from stdin, augments them with cookies from 
 #### Cookie Attributes
 - **Origin**: Derived from request host/scheme (same-origin policy)
 - **Session Cookies**: Identified by absence of `Expires` or `Max-Age` (matching browser semantics)
+  - Scoped to (origin, agent, session)
+  - Stored with session_uuid set
+  - Deleted when session ends (agent/session pair no longer used)
 - **Persistent Cookies**: Identified by `Expires` or `Max-Age` values
-- **Expiration Handling**: 
-  - Session cookies: Persist for the lifetime of the (agent, session) pair
-  - Persistent cookies: Cleaned up after `Expires`/`Max-Age` is reached
+  - Scoped to (origin, agent) only — shared across all sessions for that agent
+  - Stored with session_uuid = NULL
+  - Cleaned up after `Expires`/`Max-Age` is reached
+  - Reused across multiple sessions within the same agent
 
 #### Cookie Isolation
-Cookies are scoped to a specific (origin, agent, session) combination. No cookie leakage between:
-- Different agents (even with same session)
-- Different sessions (even with same agent)
-- Different origins (standard origin policy)
+Cookies are isolated by origin and agent, with session-level isolation for session cookies only:
+- **Session cookies** (no Expires/Max-Age): Scoped to (origin, agent, session) — start fresh each session
+- **Persistent cookies** (has Expires/Max-Age): Scoped to (origin, agent) — shared across all sessions for that agent
+- No cookie leakage between:
+  - Different agents (even with same session)
+  - Different origins (standard origin policy)
 
 ### 5. Lifecycle (MVP)
 - Accept command-line arguments
@@ -112,7 +118,7 @@ Cookies are scoped to a specific (origin, agent, session) combination. No cookie
 CREATE TABLE cookies (
     origin TEXT NOT NULL,
     agent_uuid TEXT NOT NULL,
-    session_uuid TEXT NOT NULL,
+    session_uuid TEXT,         -- NULL for persistent cookies, set for session cookies
     name TEXT NOT NULL,
     value TEXT NOT NULL,
     expires INTEGER,           -- Unix timestamp; NULL for session cookies
@@ -125,6 +131,7 @@ CREATE TABLE cookies (
     PRIMARY KEY (origin, agent_uuid, session_uuid, name)
 );
 
+CREATE INDEX idx_origin_agent ON cookies(origin, agent_uuid);
 CREATE INDEX idx_origin_agent_session ON cookies(origin, agent_uuid, session_uuid);
 ```
 
@@ -153,16 +160,22 @@ cat request.txt | ./http --agent=agent-uuid-1 --session=session-uuid-1
 # {"user": "john"}
 ```
 
-### Scenario 2: Multi-Agent Isolation
+### Scenario 2: Session vs Persistent Cookies
 ```bash
-# Agent A, Session 1
+# Agent A, Session 1 - receives both session and persistent cookies
 cat request.txt | ./http --agent=agent-a --session=session-1
-# Uses cookies for (origin, agent-a, session-1)
+# - Session cookies stored with session_uuid=session-1
+# - Persistent cookies stored with session_uuid=NULL
 
-# Agent B, Session 1 (same session, different agent)
+# Agent A, Session 2 - different session, same agent
+cat request.txt | ./http --agent=agent-a --session=session-2
+# - Gets the same persistent cookies from session-1 (session_uuid=NULL)
+# - Session cookies are different (session_uuid=session-2)
+# - Persistent cookies carry over between sessions in the same agent
+
+# Agent B, Session 1 - different agent
 cat request.txt | ./http --agent=agent-b --session=session-1
-# Uses different cookies for (origin, agent-b, session-1)
-# No cookie leakage between agents
+# - Completely isolated: no cookies from agent-a
 ```
 
 ---
