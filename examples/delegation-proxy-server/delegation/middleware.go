@@ -28,6 +28,14 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 		IdDerivationSecret:     cfg.IdDerivationSecret,
 		DelegationHeaderPubKey: cfg.DelegationHeaderPub,
 		Store:                  store,
+		// ⚠️  SECURITY WARNING ⚠️
+		// PermissiveScopeAuthorizer allows ANY principal to grant themselves ANY scopes.
+		// This is ONLY safe for localhost (127.0.0.1) development.
+		// DO NOT use this in production or on 0.0.0.0.
+		// Combined with the VS Code proxy (which opens a remote shell), this is
+		// equivalent to exposing unrestricted shell access to the network.
+		// Replace with corporate identity system and real scope authorization before production.
+		ScopeAuthorizer: &PermissiveScopeAuthorizer{},
 	}
 
 	authMux := NewAuthMiddlewareMux(

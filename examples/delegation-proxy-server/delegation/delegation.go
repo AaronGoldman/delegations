@@ -153,6 +153,40 @@ func (d Delegation) matches(host, path, method string, requiredScopes []string) 
 	return true
 }
 
+// ScopeAuthorizer validates whether a principal is authorized to delegate specific scopes.
+// Implement this interface to wire your corporate identity system (LDAP, OIDC, etc.)
+// into the delegation approval process.
+//
+// The authorizer receives:
+//   - principalID: unique identifier for the authenticated user (derived from principal_cookie)
+//   - scopes: principal URNs from the JWT (e.g., ["urn:contoso:corpuser:aagoldma", "urn:contoso:groupPrincipal(ALL-ENGINEERS)"])
+//   - host: the hostname the principal is requesting access to (from the request context)
+//   - path: the path the principal is requesting access to (from the request context)
+//   - requestedHostPattern: the host pattern the user selected (e.g., "*.example.com")
+//   - requestedPathPattern: the path pattern the user selected (e.g., "/api/*")
+//
+// It must return:
+//   - authorized: true if the principal is permitted to delegate these scopes, false otherwise
+//   - reason: if not authorized, a user-friendly message explaining why (e.g., "You can only delegate to /api/*, not /admin/*")
+//   - error: non-nil if authorization cannot be determined
+//
+// Example implementation: check if the principal's scopes (LDAP groups, OIDC roles, etc.)
+// permit delegation to the requested host/path combination.
+type ScopeAuthorizer interface {
+	// AuthorizeScopes validates whether the principal can delegate the requested scopes.
+	AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error)
+}
+
+// PermissiveScopeAuthorizer is a mock implementation that allows all scope delegations.
+// Use this for demos and testing. In production, implement ScopeAuthorizer to validate
+// against your corporate identity system (LDAP, OIDC, etc.).
+type PermissiveScopeAuthorizer struct{}
+
+func (p *PermissiveScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
+	// Always authorize — this is a demo implementation only
+	return true, "", nil
+}
+
 // DelegationStore is the persistence interface for delegations.
 // Swap in a database-backed implementation (e.g. database/sql + PostgreSQL) for production.
 type DelegationStore interface {
@@ -189,8 +223,8 @@ func matchPattern(pattern, value string) bool {
 	// Path wildcard: "/prefix/*" — the "*" must be the final segment.
 	if strings.HasSuffix(pattern, "/*") {
 		prefix := pattern[:len(pattern)-2] // strip "/*"
-		// Allow "/prefix/anything" (note: this covers multi-segment too, per spec examples)
-		return strings.HasPrefix(value, prefix+"/")
+		// Allow "/prefix", "/prefix/" or "/prefix/anything" (multi-segment paths)
+		return value == prefix || strings.HasPrefix(value, prefix+"/")
 	}
 
 	// Any other wildcard placement is unsupported → no match.

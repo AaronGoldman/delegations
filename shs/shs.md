@@ -36,18 +36,82 @@ HTTP/3 is not required. Since HTTP/3 falls back to HTTP/2 which falls back to HT
 * Port forwarding between the local localhost and the remote localhost.
 * Identity
   * The user logs in as a user on the server.
-  * The client-side credential must be on that user's ACL.
+  * The server maps the principal (user + groups from JWT) to a local OS user via ACL.
 * UI
-  * CLI installed in the path.
-  * Browser: user installs a mTLS cert.
-  * Browser: FIDO.
+  * CLI installed in the path; uses delegated cookies.
+  * Browser: uses delegated cookies; can be integrated with OIDC/FIDO via proxy.
   * Non-goal: browser/CLI username and password.
 * Single open connection
   * File transfers, shell interactions, and port forwarding are broken into relatively small messages and sent over the connection so they don't block each other.
 
+## Architecture
+
+SHS uses a three-tier delegation model with cookies (client ↔ middleware) and JWTs (middleware ↔ daemon):
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  User's Machine             Delegation Proxy            Server   │
+│                                                                  │
+│  ┌──────────┐              ┌──────────────┐        ┌──────────┐ │
+│  │   shs    │              │ Delegation   │        │ shs      │ │
+│  │  client  │              │   Proxy      │        │ daemon   │ │
+│  │ (binary) │              │ (middleware) │        │          │ │
+│  └────┬─────┘              └──────┬───────┘        └────┬─────┘ │
+│       │                           │                     │       │
+│       │ Request + cookies         │                     │       │
+│       ├──────────────────────────>│                     │       │
+│       │  (cached from            │                     │       │
+│       │   cookie jar)            │                     │       │
+│       │                           │                     │       │
+│       │              ┌────────────────────┐            │       │
+│       │              │ Validate cookies   │            │       │
+│       │              │ Map to principal   │            │       │
+│       │              │ Generate JWT with: │            │       │
+│       │              │  - user principal  │            │       │
+│       │              │  - group principals│            │       │
+│       │              │  - scopes          │            │       │
+│       │              │  - host/path/methods           │       │
+│       │              │  - short TTL       │            │       │
+│       │              └────────────────────┘            │       │
+│       │                           │                     │       │
+│       │                    Request + JWT               │       │
+│       │                    in Authorization header     │       │
+│       │                           ├────────────────────>       │
+│       │                           │                     │       │
+│       │                           │         ┌──────────────────┐
+│       │                           │         │ Verify JWT:      │
+│       │                           │         │ - Signature      │
+│       │                           │         │ - Expiry         │
+│       │                           │         │ - Host/path match│
+│       │                           │         │ - Map principals │
+│       │                           │         │   to OS user     │
+│       │                           │         │ Execute request  │
+│       │                           │         └──────────────────┘
+│       │                           │                     │       │
+│       │                      Response                   │       │
+│       │                           │<─────────────────────       │
+│       │<──────────────────────────┤                     │       │
+│       │                           │                     │       │
+│       │        [cache cookies if present]               │       │
+│       │         (agent_cookie, session_cookie)          │       │
+│       │                                                 │       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key separation:**
+- **Client ↔ Middleware:** Cookies (persistent, stored in `~/.shs/cookies.jar`)
+- **Middleware ↔ Daemon:** JWTs (short-lived, generated per-request, signed with middleware's private key, validated with middleware's public key in ACL)
+
 ## Identity and ACL
 
-The ACL is a YAML file with three sections. Send the full cert chain on TLS connect — matching is done on fingerprints alone, no CA chain validation required.
+The SHS daemon receives a signed JWT from the delegation proxy containing:
+
+- **User principal:** `urn:contoso:corpuser:aagoldma` — identifies the individual
+- **Group principals:** `urn:contoso:groupPrincipal(ALL-ENGINEERS)`, `urn:contoso:groupPrincipal(SGP-CREW-260-MEMBERS)`, etc. — group memberships
+- **Request context:** `hostPattern`, `pathPattern`, `methods`, `expiresAt` — what the delegation permits
+
+The ACL maps these principals to local OS users. The daemon validates the JWT signature before trusting any claims.
 
 ### `servers` — client-side trust
 
@@ -59,58 +123,49 @@ servers:
     - sha256-a3b1c2d4e5f6...
 ```
 
-### `clients` — server-side trust
+### `clients` — server-side access rules
 
-The key is a local OS username or group. Each credential entry is evaluated as:
+The key is a local OS username or group. Each entry maps principal patterns to the OS user they can log in as:
 
-1. **`fingerprint`** — must match any cert in the presented chain.
-2. **`require_patterns`** — each pattern must match at least one SAN on the cert. Omit if no SAN check is needed.
-3. **`username_pattern`** — regex with named capture group `(?P<user>...)` applied to the SANs. If present, the extracted username must match the key (or `--user` if passed). Omit if the key itself is the login username.
-
-If all checks pass, login proceeds as the key. If multiple SANs match `username_pattern`, login is ambiguous — the client must pass `--user` to disambiguate, and the server validates that value is present in the SANs.
+1. **`middleware_public_key`** — public key of the delegation proxy (required once per proxy; safe to bake into Docker images)
+2. **`principals`** — list of principal URNs that match this OS user. User and group principals are combined with OR logic.
 
 ```yaml
+middleware_public_key: ed25519-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
 clients:
-  # Leaf-pinned self-signed cert — no SAN checks needed, fingerprint IS the identity
-  bob:
-    - fingerprint: sha256-1c42ddc0285b9c25135be3bf345e6a041271b784b22a6f6cab6588dab93c5980
-
-  # Local OS group — anyone in ENG-ALL can log in, username extracted from cert SAN
-  ENG-ALL:
-    - fingerprint: sha256-$li_ca
-      require_patterns:
-        - "urn:li:groupPrincipal(ENG-ALL)"
-      username_pattern: 'urn:li:userPrincipal\((?P<user>[a-zA-Z0-9_-]*)\)'
-
-  # Two orgs sharing a box — each CA scopes its own username namespace
-  contoso-eng:
-    - fingerprint: sha256-$contoso_ca
-      require_patterns:
-        - "urn:li:groupPrincipal(contoso-eng)"
-      username_pattern: 'urn:contoso:userPrincipal\((?P<user>[a-zA-Z0-9_-]*)\)'
-
-  # Eponymous entry — OS user is "aaron", LDAP identity is "aagoldma"
-  # no username_pattern — key is the login user
+  # Single user — match by user principal
   aaron:
-    - fingerprint: sha256-$li_ca
-      require_patterns:
-        - "urn:li:userPrincipal(aagoldma)"
+    - principals:
+        - "urn:contoso:corpuser:aagoldma"
 
-  # RFC822 (email) SAN — OS user is "bob", cert identity is "robert@mail.example.com"
-  # mail.example.com's CA is pinned; no username_pattern — key is the login user
+  # Group-based access — anyone in ALL-ENGINEERS gets this OS user
+  eng-team:
+    - principals:
+        - "urn:contoso:groupPrincipal(ALL-ENGINEERS)"
+
+  # Multiple matching rules for same user
+  #  (e.g., different proxies or organizational structures)
   bob:
-    - fingerprint: sha256-$mail_example_ca
-      require_patterns:
-        - "robert@mail.example.com"
+    - principals:
+        - "urn:contoso:corpuser:robert"
+    - principals:
+        - "urn:contoso:groupPrincipal(PLATFORM-ONCALL)"
+        - "urn:contoso:groupPrincipal(INFRA-TEAM)"
 
-  # RFC822 general case — any user at mail.example.com, local part becomes OS username
-  # works when the email local part matches the OS username
-  mail-users:
-    - fingerprint: sha256-$mail_example_ca
-      username_pattern: '(?P<user>[^@]+)@mail\.example\.com'
+  # On-call users: match users in a specific group
+  # (group provides membership management; SHS just maps group → OS user)
+  oncall-user:
+    - principals:
+        - "urn:contoso:groupPrincipal(FEED-PLATFORM-ONCALL)"
 ```
 
-The CA fingerprint scopes which CA is trusted to assert which identity namespace. The li-ca cannot assert `urn:contoso:` identities and vice versa. Safe to bake into Docker images — fingerprints contain no secrets.
+**How matching works:**
+1. JWT arrives with principals: `["urn:contoso:corpuser:aagoldma", "urn:contoso:groupPrincipal(ALL-ENGINEERS)", "urn:contoso:groupPrincipal(SGP-CREW-260-MEMBERS)"]`
+2. Daemon checks each OS user entry in `clients`
+3. If ANY of the JWT principals match ANY principal in an entry, that OS user is authorized
+4. The first matching entry is used; login proceeds as that OS user
+
+This model keeps SHS simple: group membership is managed externally by the delegation proxy (which checks LDAP, group systems, etc.); SHS just maps whatever principals it receives to local OS users.
 
 ## CLI
 
@@ -138,25 +193,21 @@ shs example.com port $local_address:$local_port $remote_address:$remote_port
 
 ### Auth commands
 
+Authentication is delegated to the proxy; SHS only manages local ACL configuration:
+
 ```sh
-shs auth gen                           # generate default client cert → ~/.shs/client.full.pem + ~/.shs/client.key.pem
-                                       # self-signed ECC, no CN, no SAN; prints shs-<fingerprint>
-shs auth gen --san user@example.com \
-             --san urn:li:userPrincipal\(aagoldma\)  # --san is repeatable
-shs auth gen --csr                     # generate a CSR instead
-shs auth sign --in client.csr \
-              --out client.full.pem    # sign a CSR; prints SANs and prompts to confirm (stub: not yet implemented)
-shs auth add client.full.pem           # add cert to ACL, reads full chain and pins the leaf
-shs auth add shs-<hex>                 # add a raw fingerprint to the ACL
-shs auth rm  shs-<hex>                 # remove a fingerprint from the ACL
-shs auth ls                            # list policies that apply to the current OS user
+shs auth rm  urn:contoso:corpuser:aagoldma          # remove user from ACL
+shs auth rm  urn:contoso:groupPrincipal\(ENG-ALL\)  # remove group from ACL
+shs auth ls                                     # list principals authorized for the current OS user
 ```
+
+Principals are added manually by editing `~/.shs/acl.yaml` (see [Identity and ACL](#identity-and-acl) section).
 
 ### Daemon
 
 ```sh
 shs daemon                             # start with default ACL (~/.shs/acl.yaml), listen on port 443
-shs daemon --acl fingerprints.yaml     # specify ACL file
+shs daemon --acl acl.yaml              # specify ACL file
 shs daemon --port 8443                 # listen on a specific port (default: 443)
 shs daemon --webui                     # also enable the web UI
 shs daemon --dangerously-run-as-root   # allow running as root (not recommended)
@@ -164,18 +215,25 @@ shs daemon --dangerously-run-as-root   # allow running as root (not recommended)
 
 The daemon listens on port 443 by default (HTTPS). Use `--port` to bind to a different port. To bind port 443 as an unprivileged user, use `setcap cap_net_bind_service+ep /usr/local/bin/shs`.
 
-`shs auth ls` shows only policies that apply to the current OS user, in two sections. Group-inherited policies include the group name so the user knows which membership to revoke if they want to remove access.
+#### JWT Validation
+
+The daemon expects requests to arrive with a signed JWT in the `Authorization: Bearer <jwt>` header (set by the delegation proxy). It validates:
+
+1. **Signature** — verify using the `middleware_public_key` from the ACL
+2. **HostPattern** — request host must match the JWT's `hostPattern`
+3. **PathPattern** — request path must match the JWT's `pathPattern`
+4. **Methods** — request HTTP method must be in the JWT's `methods` array
+5. **ExpiresAt** — JWT must not be expired
+
+If all checks pass, the daemon extracts the principals (`user` and `groups`) from the JWT and maps them to a local OS user via the `clients` section of the ACL. The request proceeds as that user.
+
+`shs auth ls` shows only principals that allow login to the current OS user. These principals are defined in the ACL and may come from direct user assignment or group membership managed by the delegation proxy.
 
 ```
-Direct policies:
-  bob
-    shs-1c42ddc0...
-
-Group-inherited policies:
-  ENG-ALL
-    shs-a3b1c2d4...   (remove with: gpasswd -d bob ENG-ALL)
-  INFOSEC-PLATFORMSEC-PARTNERS-TEAM
-    shs-a3b1c2d4...   (remove with: gpasswd -d bob INFOSEC-PLATFORMSEC-PARTNERS-TEAM)
+Principals authorized for current OS user (aaron):
+  urn:contoso:corpuser:aagoldma
+  urn:contoso:groupPrincipal(ALL-ENGINEERS)
+  urn:contoso:groupPrincipal(SGP-CREW-260-MEMBERS)
 ```
 
 The daemon refuses to start if running as root unless `--dangerously-run-as-root` is passed. Use `setcap cap_net_bind_service+ep /usr/local/bin/shs` to allow binding port 443 as an unprivileged user.
@@ -184,10 +242,9 @@ The daemon refuses to start if running as root unless `--dangerously-run-as-root
 
 Good defaults matter because people don't configure things.
 
-* Port 443 for HTTPS.
-* **Client cert auto-generation:** if no client key is found in `~/.shs/` when connecting to a host, one is generated automatically — self-signed ECC, no CN, no SAN. The fingerprint is printed as `shs-<hex>` so the user can add it to the server's ACL.
+* **Port 443 for HTTPS** — standard secure port for web traffic.
 * **Server cert auto-generation:** if no `server.key.pem` and `server.full.pem` are found when the daemon starts, they are generated automatically. The fingerprint is printed so clients can pin it.
-* `shs auth gen` with no args produces the same bare minimum cert: ECC, no CN, no SAN, saved to the default paths.
+* **Delegation via proxy:** client authentication is delegated to a proxy (middleware); SHS does not generate client certs.
 * Default file locations, resolved against `$HOME` of the running user:
 
 | File | Default path | Secret? |
@@ -195,20 +252,52 @@ Good defaults matter because people don't configure things.
 | ACL | `~/.shs/acl.yaml` | No — safe to bake into Docker images |
 | Server cert | `~/.shs/server.full.pem` | No — public |
 | Server private key | `~/.shs/server.key.pem` | Yes — mount at runtime |
-| Client cert | `~/.shs/client.full.pem` | No — public |
-| Client private key | `~/.shs/client.key.pem` | Yes — keep out of images |
 
-## UI
+## Client Flow
 
-### CLI
+### First Access (No Cookie)
 
-Hitting the endpoint with the CLI logs in with the default credentials and drops you in a shell. See [Client commands](#client-commands) above.
+```
+$ shs example.com
+# 1) Client makes request to middleware
+# 2) Middleware has no cookie for this domain/path → 401
+# 3) Middleware sets agent_cookie + session_cookie
+# 4) Middleware returns delegation_url with token parameter
+
+Authorization required.
+Please visit: https://example.com/delegate?token=eyJhbGci...
+# (OR shows QR code, pushes link to agent's notification system, etc.)
+
+$ shs example.com
+# Now user has visited delegation URL and approved
+# Client sends request with cached cookies
+# 5) Middleware validates cookies
+# 6) Middleware generates short-lived JWT with user+group principals
+# 7) Middleware proxies to shs daemon with JWT in Authorization header
+# 8) Daemon validates JWT signature, host/path/methods, expiry
+# 9) Daemon maps principals to OS user
+# 10) Shell drops
+
+$
+```
+
+### Subsequent Requests
+
+Client reuses cached cookies from the cookie jar. Middleware validates them and mints a fresh short-lived JWT for each request.
+
+### Cookie Jar
+
+The shs binary maintains a cookie jar (like curl, wget, browsers) to cache cookies across invocations:
+
+| File | Default path | Secret? |
+|---|---|---|
+| Cookie jar | `~/.shs/cookies.jar` | Yes — contains session tokens |
 
 ### Web UI
 
 > Disabled by default. Enable with `shs daemon --webui`.
 
-Hitting the endpoint with the browser triggers the mTLS client cert selector and drops you into a VS Code-like environment with:
+The browser connects through the middleware using the same cookie-based delegation flow. After the user approves the delegation, they access a VS Code-like environment with:
 
 * A shell
 * A local file tree
@@ -218,6 +307,9 @@ Hitting the endpoint with the browser triggers the mTLS client cert selector and
 
 ## TODO
 
-* [ ] Alternative authentication methods: FIDO/WebAuthn, TOTP. How do these interact with the mTLS identity model? Can they be layered on top as a second factor, or used as a primary alternative for environments where managing client certs is impractical?
+* [ ] Cookie jar implementation: Implement cookie persistence compatible with net/http.Cookie or similar (max-age, secure flag, etc.)
+* [ ] JWT validation: Implement JWT signature verification using the middleware's public key from ACL
+* [ ] Principal matching: Implement principal-based ACL matching (user + group ORing logic)
+* [ ] Delegation proxy reference implementation: Build the middleware that handles cookie validation, JWT generation, principal extraction from external identity system
 * [ ] PAM integration. SSH runs the PAM session stack (`pam_open_session`) on login, which handles home directory mounting, `lastlog` updates, account restrictions, and other site-local policy. SHS MVP skips PAM — it resolves the user via `os/user`, sets UID, primary GID, and all supplementary groups, then execs the shell. This is sufficient for most environments but will break on systems that rely on PAM for session setup (e.g. SSSD, home-on-NFS, access restrictions via `pam_access`). PAM support needs to be added before SHS is suitable for those environments.
 

@@ -5,6 +5,7 @@
 // Endpoints:
 //
 //	GET  /api/whoami              Protected by delegated-access auth. Returns caller identity.
+//	GET  /code                    Protected by delegated-access auth. Proxies HTTP/WebSocket to VS Code socket.
 //	GET  /delegations/ask?token=… Delegation grant UI (shown to the user in a browser).
 //	POST /delegations/grant       Processes the grant form submission (CSRF protected).
 //	GET  /delegations             Lists all active grants.
@@ -32,12 +33,16 @@ func main() {
 	// Mount API routes with required scopes
 	authMux.Handle("/api/", api.NewMux(pubKey), []string{"profile_view"})
 
+	// Mount /code endpoint for VS Code web socket proxy
+	authMux.HandleFunc("/code/", VscodeProxyHandler(pubKey), []string{"code_access"})
+
 	baseURL := "http://" + listenAddr
 	port := listenAddr[strings.LastIndex(listenAddr, ":"):]
 	stagingURL := "http://staging.localhost" + port
 	log.Printf("delegation-proxy-server listening on %s", baseURL)
 	log.Printf("  GET  %s/api/whoami                 — protected demo endpoint", baseURL)
 	log.Printf("  GET  %s/api/whoami                 — protected demo endpoint (subdomain)", stagingURL)
+	log.Printf("  GET  %s/code/                      — protected VS Code socket proxy", baseURL)
 	log.Printf("  GET  %s/delegations/ask?token=…   — grant approval UI", baseURL)
 	log.Printf("  GET  %s/delegations                — list active grants", baseURL)
 	log.Printf("  GET  %s/delegations/key            — Ed25519 public key for Authorization: Bearer", baseURL)

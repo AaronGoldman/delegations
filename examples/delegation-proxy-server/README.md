@@ -8,6 +8,39 @@ Run it with no configuration — a `config.json` is created automatically on fir
 go run .
 ```
 
+### Using the Makefile
+
+The project includes a `Makefile` for managing the proxy server and VS Code server:
+
+```
+make help              # Show all available targets
+make dev              # Start VS Code server and proxy server
+make dev-server       # Start proxy server only (assumes VS Code is running)
+make vscode           # Start VS Code server only
+make clean            # Kill VS Code server and clean up socket
+```
+
+**VS Code Server Setup:**
+
+The proxy requires a VS Code server running on a Unix socket. Start it with:
+
+```
+make vscode
+```
+
+This runs:
+```
+code serve-web --socket-path /tmp/vscode.sock --without-connection-token --server-base-path /code/
+```
+
+Then in another terminal, start the proxy with:
+
+```
+make dev-server
+```
+
+Or use `make dev` to start both (though they'll run in the same process; use separate terminals for better control).
+
 ---
 
 ## The Flow
@@ -99,6 +132,30 @@ GET /api/whoami
 | `server_secret` | UUIDv5 namespace for deriving stable IDs from cookie values |
 
 Keep `jwt_secret` and `server_secret` private. Rotating `server_secret` invalidates all existing cookie-derived IDs.
+
+---
+
+## ⚠️ SECURITY WARNING
+
+**This is a demonstration server. It is NOT suitable for production.**
+
+### Critical Issues
+
+1. **Permissive Scope Authorizer**: The `PermissiveScopeAuthorizer` allows ANY principal to grant themselves ANY scopes. Anyone can approve their own delegation requests.
+
+2. **Remote Shell Access**: The `/code/*` endpoints proxy to a VS Code server, which provides full remote shell access to the machine.
+
+3. **localhost Only**: This server is bound to `127.0.0.1:8080` by default. **Do NOT change this to `0.0.0.0` without replacing `PermissiveScopeAuthorizer` with a real identity/authorization system.**
+
+### Before Production
+
+- Replace `PermissiveScopeAuthorizer` with a real authorization system that validates:
+  - Principal identity (LDAP, SAML, OAuth, etc.)
+  - Scope eligibility (per-user permissions, org policy, etc.)
+- Bind to a secure network interface or require TLS + mutual authentication
+- Remove or secure the VS Code proxy endpoint
+- Audit and test scope enforcement thoroughly
+- Use proper secrets management (don't hardcode in `config.json`)
 
 ---
 

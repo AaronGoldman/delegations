@@ -1,8 +1,8 @@
 package delegation
 
 import (
-	_ "embed"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,6 +24,7 @@ type SessionsServer struct {
 	IdDerivationSecret     string
 	DelegationHeaderPubKey ed25519.PublicKey
 	Store                  DelegationStore
+	ScopeAuthorizer        ScopeAuthorizer // validates principal authorization for requested scopes
 }
 
 var tmplFuncs = template.FuncMap{
@@ -80,14 +81,14 @@ type delegatePageData struct {
 	PathOptions []string // ordered from narrowest to broadest
 }
 
-// hostScopeOptions returns the selectable host scope levels for a given host
-// pattern, ordered from narrowest (exact) to broadest (widest wildcard).
+// hostExpansionOptions returns progressively broader wildcard host patterns,
+// ordered from narrowest (exact) to broadest (widest wildcard).
 // Examples:
 //
 //	"staging.localhost:8080"     → ["staging.localhost:8080", "*.localhost:8080"]
 //	"sub.example.com"           → ["sub.example.com", "*.example.com"]
 //	"a.b.example.com"           → ["a.b.example.com", "*.b.example.com", "*.example.com"]
-func hostScopeOptions(host string) []string {
+func hostExpansionOptions(host string) []string {
 	hostname, port, hasPort := strings.Cut(host, ":")
 	portSuffix := ""
 	if hasPort {
@@ -111,16 +112,17 @@ func hostScopeOptions(host string) []string {
 	return options
 }
 
-// pathScopeOptions returns the selectable path scope levels for a given path
-// pattern, ordered from narrowest (exact) to broadest (/*).
+// pathExpansionOptions returns progressively broader wildcard path patterns,
+// ordered from narrowest (exact) to broadest (/*).
 // Example: "/a/b/c" → ["/a/b/c", "/a/b/*", "/a/*", "/*"]
-func pathScopeOptions(path string) []string {
+func pathExpansionOptions(path string) []string {
 	if path == "" {
 		return nil
 	}
 
-	// Normalize: remove trailing "/*" and handle root case
+	// Normalize: remove trailing "/" and "/*", handle root case
 	norm := strings.TrimSuffix(path, "/*")
+	norm = strings.TrimSuffix(norm, "/")
 	if norm == "" {
 		norm = "/"
 	}
@@ -138,7 +140,16 @@ func pathScopeOptions(path string) []string {
 	options := []string{path}
 	seen := map[string]bool{path: true}
 
-	// Generate wider scopes
+	// If path doesn't already end with /*, add that as an option
+	if !strings.HasSuffix(path, "/*") && norm != "/" {
+		pathWithWildcard := norm + "/*"
+		if !seen[pathWithWildcard] {
+			options = append(options, pathWithWildcard)
+			seen[pathWithWildcard] = true
+		}
+	}
+
+	// Generate wider wildcard patterns by replacing trailing segments with "/*"
 	for i := len(segments) - 1; i >= 0; i-- {
 		prefix := "/" + strings.Join(segments[:i], "/")
 		w := prefix + "/*"
@@ -215,8 +226,8 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		Delegation:  d,
 		Token:       token,
 		CSRFToken:   csrfToken,
-		HostOptions: hostScopeOptions(d.HostPattern),
-		PathOptions: pathScopeOptions(d.PathPattern),
+		HostOptions: hostExpansionOptions(d.HostPattern),
+		PathOptions: pathExpansionOptions(d.PathPattern),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := delegateTemplate.Execute(w, data); err != nil {
@@ -291,10 +302,14 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply user-selected scope overrides (broader than what the JWT requested).
+	// Determine the requested host and path patterns (original if not overridden)
+	requestedHostPattern := claims.HostPattern
+	requestedPathPattern := claims.PathPattern
+
+	// Apply user-selected wildcard overrides (broader than what the JWT requested).
 	if hp := r.FormValue("host_pattern"); hp != "" {
 		valid := false
-		for _, o := range hostScopeOptions(claims.HostPattern) {
+		for _, o := range hostExpansionOptions(claims.HostPattern) {
 			if o == hp {
 				valid = true
 				break
@@ -304,11 +319,11 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid host_pattern", http.StatusBadRequest)
 			return
 		}
-		claims.HostPattern = hp
+		requestedHostPattern = hp
 	}
 	if pp := r.FormValue("path_pattern"); pp != "" {
 		valid := false
-		for _, o := range pathScopeOptions(claims.PathPattern) {
+		for _, o := range pathExpansionOptions(claims.PathPattern) {
 			if o == pp {
 				valid = true
 				break
@@ -318,12 +333,36 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid path_pattern", http.StatusBadRequest)
 			return
 		}
-		claims.PathPattern = pp
+		requestedPathPattern = pp
 	}
 
+	// Validate that the principal is authorized to delegate these scopes.
+	if s.ScopeAuthorizer != nil {
+		authorized, reason, err := s.ScopeAuthorizer.AuthorizeScopes(
+			principalID, claims.Scopes,
+			claims.HostPattern, claims.PathPattern,
+			requestedHostPattern, requestedPathPattern,
+		)
+		if err != nil {
+			log.Printf("ERROR AuthorizeScopes: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !authorized {
+			log.Printf("DENIED principal=%s host=%s path=%s requested_host=%s requested_path=%s: %s",
+				principalID, claims.HostPattern, claims.PathPattern, requestedHostPattern, requestedPathPattern, reason)
+			http.Error(w, "not authorized: "+reason, http.StatusForbidden)
+			return
+		}
+	}
+
+	// Apply the validated patterns to the delegation
+	claims.HostPattern = requestedHostPattern
+	claims.PathPattern = requestedPathPattern
+
 	claims.DelegationID = NewUUIDv4()
-	claims.PrincipalID  = principalID
-	claims.Breadth      = breadth
+	claims.PrincipalID = principalID
+	claims.Breadth = breadth
 
 	if err := s.Store.AddDelegation(*claims); err != nil {
 		log.Printf("ERROR AddDelegation: %v", err)

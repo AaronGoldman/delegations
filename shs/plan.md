@@ -129,58 +129,84 @@ Each forwarded connection gets a unique stream ID. `PORT_DATA` messages carry th
 
 ---
 
-## Phase 4: Auth
+## Phase 4: Auth (Delegation-based)
 
-### MVP scope: no CA system
+Client authentication is delegated to an external middleware (proxy). The SHS daemon trusts a signed JWT from the proxy, rather than validating client certificates directly.
 
-For the MVP, both the server and client use self-signed certs. We do not integrate with any CA — no Let's Encrypt, no ACME, no intermediate CAs. Trust is established purely by pinning:
+### Architecture
 
-- **Server cert:** auto-generated on first daemon start if `~/.shs/server.full.pem` and `~/.shs/server.key.pem` are not found. Fingerprint is printed so clients can pin it. On first connect to an unknown host, the client shows the domain and fingerprint and prompts the user to confirm:
-  ```
-  The authenticity of host 'example.com/path' cannot be established.
-  Fingerprint: shs-a3b1c2d4e5f6...
-  Add to known hosts? [y/N]
-  ```
-  On confirmation, the fingerprint is appended to the `servers` section of `~/.shs/acl.yaml` under the domain key. On subsequent connects, if the fingerprint matches the stored value the connection proceeds silently. If the fingerprint has changed, the client shows the new fingerprint and prompts again — the user can add the new fingerprint (the old one remains and can be removed with `shs auth rm`).
-- **Client cert:** auto-generated on first connect if `~/.shs/client.full.pem` and `~/.shs/client.key.pem` are not found. Bare ECC, no CN, no SAN. Fingerprint is printed as `shs-<hex>` so the server admin can add it to `acl.yaml`.
+```
+┌─────────┐    cookies      ┌──────────────┐      JWT      ┌──────────┐
+│ shs     │←───────────────→│ Delegation   │←─────────────→│ shs      │
+│ client  │  + delegation   │ Proxy        │  + principal  │ daemon   │
+│ (CLI)   │  URLs on first  │ (middleware) │  mapping      │ (server) │
+└─────────┘     access      └──────────────┘               └──────────┘
+```
 
-CA support (`shs auth sign`, CSRs, group ACLs via CA fingerprint) is designed for later but not required for Phase 4 to be functional.
+### Server-side setup
+- **Server cert:** auto-generated on first daemon start if `~/.shs/server.full.pem` and `~/.shs/server.key.pem` are not found. Fingerprint is printed so clients can pin it. Used only for HTTPS transport layer, not for authentication.
+- **ACL configuration:** Add the delegation proxy's public key to `~/.shs/acl.yaml`. The daemon uses this key to verify JWT signatures from the proxy.
+- **Principal mapping:** Define which principals (user + group URNs) map to which local OS users in the `clients` section of the ACL.
 
-### ACL file
+### JWT validation (SHS daemon)
+When a request arrives with a JWT in the `Authorization: Bearer` header:
+
+1. **Verify signature** — using the middleware's public key from ACL
+2. **Check expiry** — JWT must not be expired
+3. **Validate request context** — JWT's hostPattern, pathPattern, methods must match the incoming request
+4. **Extract principals** — get user + group principals from JWT
+5. **Map to OS user** — check ACL `clients` section to find a matching principal entry
+6. **Process spawning** — resolve user with `user.Lookup()`, get supplementary groups with `user.GroupIds()`, set `syscall.Credential` with UID, primary GID, and all supplementary GIDs, exec the user's shell or command
+7. **Note:** MVP skips the PAM session stack (`pam_open_session`). Sufficient for most environments but will break on systems relying on PAM for session setup (SSSD, home-on-NFS, `pam_access`).
+
+### Client-side cookie jar
+- Default location: `~/.shs/cookies.jar` (resolved against the user's `$HOME`)
+- Persist cookies (agent_cookie, session_cookie) across invocations
+- On first access to a new domain/path: server returns 401 + cookies + delegation_url; client displays URL to user
+- User visits delegation URL in browser, approves the delegation
+- Client reuses cached cookies on retry
+- Middleware validates cookies and mints short-lived JWT for each request
+
+### Server-side ACL file
 - Default location: `~/.shs/acl.yaml` (resolved against the daemon user's `$HOME`)
 - Load on startup; watch for changes and reload without restart
 - Specified with `--acl` flag: `shs daemon --acl /path/to/acl.yaml`
-- Two sections:
-  - **`servers`** — client-side trust: domain → list of trusted server cert fingerprints
-  - **`clients`** — server-side trust: local OS username or group → list of credential entries
+- Three elements:
+  - **`middleware_public_key`** — public key (RSA, ECDSA, or EdDSA) used to verify JWT signatures from the proxy
+  - **`servers`** — client-side trust: domain → list of trusted server cert fingerprints (for client to verify daemon's HTTPS cert via trust-on-first-use)
+  - **`clients`** — server-side access rules: local OS username or group → list of principal entries
 
-### Server-side auth algorithm
-On TLS handshake, require client to send the full cert chain. For each entry in `clients`:
-1. If any cert in the chain matches the entry's `fingerprint` — proceed
-2. If `require_patterns` is present — each pattern must match at least one SAN on that cert
-3. If `username_pattern` is present — apply regex to SANs, extract `(?P<user>...)`, match against the key (or `--user` if passed)
-4. If all checks pass, log in as the key (OS username or group member)
+### Principal matching
+For each entry in `clients`:
+1. Extract user and group principals from the JWT
+2. Check if ANY principal in the JWT matches ANY principal in the entry's `principals` list
+3. If a match is found, log in as the key (OS username or group member)
+4. Use the first matching entry; subsequent entries are not checked
 
-If multiple SANs match `username_pattern`, the client must pass `--user` to disambiguate; the server validates that value is present in the SANs.
+Example:
+```yaml
+clients:
+  aaron:
+    - principals:
+        - "urn:contoso:corpuser:aagoldma"
+  
+  eng-team:
+    - principals:
+        - "urn:contoso:groupPrincipal(ALL-ENGINEERS)"
+        - "urn:contoso:groupPrincipal(SGP-CREW-260-MEMBERS)"
+```
 
-### Process spawning
-- Resolve user with `user.Lookup()`, get supplementary groups with `user.GroupIds()`
-- Set `syscall.Credential` with UID, primary GID, and all supplementary GIDs
-- Exec the user's shell (from `/etc/passwd`) or the requested command
-- Note: MVP skips the PAM session stack (`pam_open_session`). Sufficient for most environments but will break on systems relying on PAM for session setup (SSSD, home-on-NFS, `pam_access`).
+If the JWT contains `urn:contoso:corpuser:aagoldma`, it matches the `aaron` entry and logs in as `aaron`. If the JWT contains `urn:contoso:groupPrincipal(ALL-ENGINEERS)` but not the user principal, it matches the `eng-team` entry and logs in as `eng-team`.
 
 ### `shs auth` commands
-- `shs auth gen` — generate key + self-signed cert, ECC, no CN, no SAN; save to `~/.shs/client.full.pem` + `~/.shs/client.key.pem`; print `shs-<fingerprint>`
-- `shs auth gen --san user@example.com --san urn:li:userPrincipal\(aagoldma\)` — `--san` is repeatable
-- `shs auth gen --csr` — generate key + CSR instead
-- `shs auth sign --in client.csr --out client.full.pem` — stub only; prints "not yet implemented" and exits non-zero
-- `shs auth add client.full.pem` — parse chain, pin leaf fingerprint, append to `acl.yaml`
-- `shs auth add shs-<hex>` — append raw fingerprint to `acl.yaml`
-- `shs auth rm shs-<hex>` — remove fingerprint from `acl.yaml`
-- `shs auth ls` — list policies that apply to the current OS user; two sections: direct policies and group-inherited policies (with the group name and how to remove)
+- `shs auth rm urn:contoso:corpuser:aagoldma` — remove a user principal from the ACL
+- `shs auth rm urn:contoso:groupPrincipal\(GROUP-NAME\)` — remove a group principal from the ACL
+- `shs auth ls` — list principals authorized for the current OS user
+
+Principals are added by manually editing `~/.shs/acl.yaml`, not via CLI.
 
 ### Milestone
-Server rejects connections with no valid cert. `shs auth gen` + `shs auth add` + `shs daemon` is the full setup flow.
+Daemon validates JWTs from the proxy and maps principals to OS users. Client maintains a cookie jar and reuses cached cookies. First-time users are prompted with a delegation URL to approve access.
 
 ---
 
@@ -190,18 +216,24 @@ Server rejects connections with no valid cert. `shs auth gen` + `shs auth add` +
 
 ### Server
 - Serve a single-page app at the SHS endpoint when hit by a browser (detected by `Accept: text/html`)
-- Browser triggers mTLS client cert selection natively on page load; the WebSocket upgrade reuses the same TLS session — no second cert picker, no JS cert API needed
+- Browser goes through the same delegation proxy flow as the CLI: first request returns 401 + cookies + delegation_url; user approves in browser; subsequent requests use cached cookies
+- Proxy validates cookies and mints a JWT, which is forwarded to the daemon
 - WebSocket backend is the same as the CLI (same message protocol)
-- The SPA is served from the same origin (same host, same port 443) as the WebSocket endpoint — this eliminates CORS entirely and is what makes the client cert inheritance work
+- The SPA is served from the same origin (same host, same port 443) as the WebSocket endpoint
+- The SPA connects directly to the daemon's WebSocket: `const socket = new WebSocket('wss://example.com/shs');` — the proxy handles authentication on WebSocket upgrade by validating the JWT from the initial HTTP request
 
-#### Unauthenticated landing page
-TLS client cert verification must be set to `tls.RequestClientCert` (optional), not `tls.RequireAnyClientCert`. Auth is enforced at the HTTP handler layer, not the TLS layer — this allows the server to respond with a useful page when no cert is presented rather than dropping the connection during the TLS handshake.
+#### Authorization flow
+When a browser hits the endpoint without a valid delegation:
+1. Browser makes request to delegation proxy (middleware)
+2. Proxy responds with 401 + cookies + delegation_url
+3. SHS Web UI detects 401 and displays delegation_url to the user (as a clickable link or QR code)
+4. User clicks the link (or scans QR), opens it in a browser tab
+5. Delegation proxy shows the authorization approval page
+6. User approves and grants access
+7. User returns to original tab and retries
+8. Browser now has cached cookies; proxy validates them and allows the connection
 
-When a browser hits the endpoint with no valid client cert, serve an onboarding page that:
-- Explains how to generate and install a client cert in the browser
-- Provides a download link for the server's own cert (`~/.shs/server.full.pem`) so the user can inspect or pin it
-
-This is the browser equivalent of CLI trust-on-first-use: the unauthenticated user can retrieve the server cert over HTTPS and decide whether to trust it before installing their client cert. If the server is running behind a domain with a CA-signed cert (e.g. Let's Encrypt), the browser already trusts the server cert natively and only the client cert onboarding instructions are relevant. The CLI is unaffected — it still pins the server cert leaf on first connect regardless.
+This uses the same Principal-Agent Delegation flow defined in delegated-access-token.md.
 
 ### Content Security Policy
 The daemon generates a random nonce per request and injects it into the `index.html` template and the `Content-Security-Policy` header:
@@ -275,4 +307,9 @@ shs/
 
 ## TODO
 
-* [ ] Alternative authentication methods: FIDO/WebAuthn, TOTP. How do these interact with the mTLS identity model? Can they be layered on top as a second factor, or used as a primary alternative for environments where managing client certs is impractical? Likely used only to add fingerprints to the acl.yaml
+* [ ] Cookie jar implementation: Implement secure cookie jar compatible with `net/http.Cookie`, respecting secure flags, max-age, expiry
+* [ ] JWT validation: Implement JWT signature verification (RSA, ECDSA, EdDSA) using the middleware's public key from ACL
+* [ ] Principal matching: Implement ACL matching logic for principals (user + group principals with OR logic)
+* [ ] Delegation middleware reference implementation: Build example middleware that handles cookie validation, JWT generation, principal extraction from external identity systems
+* [ ] Alternative identity providers: Integrate with OIDC, SAML, LDAP for principal extraction (handled by middleware, not SHS daemon)
+* [ ] PAM integration: Add support for `pam_open_session` to handle home directory mounting, account restrictions, and site-local policy
