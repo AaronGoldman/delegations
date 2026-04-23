@@ -49,6 +49,10 @@ func VscodeProxyHandler(pubKey ed25519.PublicKey) http.HandlerFunc {
 				// Log the forwarded request for debugging
 				log.Printf("Forwarding to VS Code: %s %s", req.Method, req.URL.String())
 			},
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				log.Printf("ERROR: VS Code proxy failed: %v", err)
+				writeVscodeUnavailableError(w)
+			},
 		}
 
 		proxy.ServeHTTP(w, r)
@@ -61,7 +65,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := net.Dial("unix", "/tmp/vscode.sock")
 	if err != nil {
 		log.Printf("ERROR: failed to connect to VS Code socket: %v", err)
-		http.Error(w, fmt.Sprintf("failed to connect to VS Code: %v", err), http.StatusBadGateway)
+		writeVscodeUnavailableError(w)
 		return
 	}
 	defer conn.Close()
@@ -123,4 +127,55 @@ func copyData(dst net.Conn, src net.Conn) (int64, error) {
 			return total, err
 		}
 	}
+}
+
+// writeVscodeUnavailableError returns a helpful 502 error when VS Code server is unavailable.
+func writeVscodeUnavailableError(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>VS Code Server Unavailable</title>
+	<style>
+		body { font-family: system-ui, sans-serif; max-width: 600px; margin: 60px auto; padding: 20px; color: #1a1a1a; }
+		h1 { color: #d32f2f; margin-bottom: 4px; }
+		.subtitle { color: #666; margin-top: 0; margin-bottom: 24px; }
+		.code { background: #f5f5f5; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.9rem; margin: 16px 0; overflow-x: auto; }
+		.steps { margin: 24px 0; }
+		.steps ol { line-height: 1.8; }
+		.steps li { margin-bottom: 12px; }
+	</style>
+</head>
+<body>
+	<h1>502 Bad Gateway</h1>
+	<p class="subtitle">VS Code server is not running or unavailable.</p>
+
+	<h2>What's happening?</h2>
+	<p>The VS Code proxy server is running, but the VS Code development server on the Unix socket is not available.</p>
+
+	<h2>How to fix it</h2>
+	<div class="steps">
+		<ol>
+			<li>Start the VS Code server in a separate terminal:
+				<div class="code">make vscode</div>
+			</li>
+			<li>Or manually:
+				<div class="code">code serve-web --socket-path /tmp/vscode.sock --without-connection-token --server-base-path /code/</div>
+			</li>
+			<li>Once the server is running, retry your request.</li>
+		</ol>
+	</div>
+
+	<h2>Troubleshooting</h2>
+	<ul>
+		<li>Check if <code>/tmp/vscode.sock</code> exists: <code>ls -la /tmp/vscode.sock</code></li>
+		<li>Make sure you have the VS Code CLI installed: <code>code --version</code></li>
+		<li>Check server logs for errors if the socket exists but the server isn't responding.</li>
+	</ul>
+</body>
+</html>
+`)
 }
