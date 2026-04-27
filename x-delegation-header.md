@@ -11,6 +11,29 @@ The delegation bearer token uses EdDSA (Ed25519) signatures to enable stateless,
 
 ---
 
+## Thesis Statement
+
+This specification implements ambient authentication across the delegation system with a clear separation of concerns:
+
+**Storage:**
+- **Principal's browser** stores the principal cookie
+- **Agent's HTTP tool** stores the agent cookie
+- **Reverse proxy** stores:
+  - The delegation grants
+  - SSL certificates
+  - Hashes of cookies (principal and agent)
+  - Access Control Lists (ACLs)
+  - Routing rules
+
+**Ambient Authentication:**
+- The principal receives ambient auth from the browser
+- The agent receives ambient auth from the HTTP tool
+- The application receives ambient auth from being called by the reverse proxy
+
+**Key Insight:** Secrets are stored only by the browser, HTTP tool, and reverse proxy—never by the principal, agent, or application. This design eliminates the risk of secrets being exposed through application-level code or misconfiguration.
+
+---
+
 ## 1. Overview
 
 ### 1.1 The Problem

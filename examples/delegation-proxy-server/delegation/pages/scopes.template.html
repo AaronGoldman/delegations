@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Service Grant</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 680px; margin: 60px auto; padding: 0 20px; color: #1a1a1a; }
+  h1   { font-size: 1.4rem; margin-bottom: 4px; }
+  h2   { font-size: 1.1rem; margin-top: 32px; margin-bottom: 8px; }
+  .subtitle { color: #555; margin-top: 0; margin-bottom: 24px; }
+  .empty { color: #888; }
+  .scope-item { border: 1px solid #e4e4e7; border-radius: 8px; padding: 12px 16px; margin: 8px 0; font-family: monospace; font-size: 0.88rem; word-break: break-all; background: #fafafa; }
+  .badge { display: inline-block; background: #dbeafe; color: #1d4ed8; border-radius: 4px; padding: 2px 8px; font-size: 0.78rem; font-weight: 600; margin-right: 8px; vertical-align: middle; }
+  .form-box { border: 1px solid #e4e4e7; border-radius: 8px; padding: 20px 24px; margin-top: 16px; background: #fff; }
+  label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; color: #333; }
+  .hint { font-size: 0.8rem; color: #666; margin-bottom: 10px; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 9px 40px 9px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; margin-bottom: 14px; }
+  input[type=text]:focus, input[type=password]:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px #eef2ff; }
+  .seed-wrap { position: relative; margin-bottom: 14px; }
+  .seed-wrap input { margin-bottom: 0; width: 100%; }
+  .eyeball { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; padding: 4px; color: #6b7280; line-height: 0; }
+  .eyeball:hover { color: #4f46e5; }
+  .preview-box { background: #f4f4f5; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 0.82rem; word-break: break-all; min-height: 2.4em; color: #333; margin-bottom: 14px; }
+  .preview-box.empty { color: #aaa; font-style: italic; font-family: system-ui, sans-serif; }
+  button[type=submit] { padding: 9px 22px; background: #4f46e5; color: #fff; border: none; border-radius: 6px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
+  button[type=submit]:hover { background: #4338ca; }
+  button[type=submit]:disabled { background: #a5b4fc; cursor: not-allowed; }
+  .warning { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; padding: 10px 14px; font-size: 0.82rem; color: #92400e; margin-bottom: 14px; }
+  .info { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; font-size: 0.85rem; color: #1e40af; margin-bottom: 20px; line-height: 1.5; }
+  .nav { margin-bottom: 24px; font-size: 0.88rem; }
+  .nav a { color: #4f46e5; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+  .gen-btn { padding: 5px 12px; background: #f4f4f5; color: #374151; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.82rem; cursor: pointer; white-space: nowrap; }
+  .gen-btn:hover { background: #e4e4e7; border-color: #9ca3af; }
+  select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; margin-bottom: 14px; background: #fff; }
+  .method-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .cb-label { display: flex; align-items: center; gap: 5px; font-size: 0.88rem; font-weight: 400; cursor: pointer; }
+  .cb-label input[type=checkbox] { width: 15px; height: 15px; margin: 0; cursor: pointer; }
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grant-input { padding-right: 12px !important; }
+  .sep { border: none; border-top: 1px solid #e4e4e7; margin: 18px 0; }
+</style>
+</head>
+<body>
+<div class="nav"><a href="/delegations">&larr; Active Grants</a></div>
+
+<h1>Self-Service Grant</h1>
+<p class="subtitle">Principal: <code>{{.PrincipalID}}</code> &nbsp;&middot;&nbsp; Agent: <code>{{.AgentID}}</code></p>
+
+<div class="info">
+  <strong>Self-service:</strong> Enter your seed phrase to prove you control a <code>did:key</code>, then pick
+  the host, path, and methods you want to grant yourself access to. The proxy registers your key
+  and stores the delegation in a single step — no admin approval needed.
+</div>
+
+<h2>Registered did:key Scopes</h2>
+{{if not .Scopes}}
+<p class="empty">No scopes registered yet.</p>
+{{else}}
+{{range .Scopes}}
+<div class="scope-item"><span class="badge">did:key</span>{{.}}</div>
+{{end}}
+{{end}}
+
+<h2>Register Key &amp; Grant Access</h2>
+<div class="form-box">
+  <div class="warning">
+    ⚠ The seed phrase is used to deterministically derive your Ed25519 private key.
+    Use a long, random, secret value. Anyone who knows the seed can impersonate this key.
+  </div>
+
+  <!-- Hidden username field so browsers associate the password with this principal. -->
+  <input type="text" autocomplete="username" name="username" value="{{.PrincipalID}}" style="display:none" readonly>
+
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
+    <label for="seed" style="margin-bottom:0">Seed phrase</label>
+    <button type="button" id="gen-seed" class="gen-btn">&#x1F3B2; Generate</button>
+  </div>
+  <p class="hint">Enter any secret string, or generate one. The page derives an Ed25519 keypair via SHA-256 of the seed — entirely in your browser.</p>
+  <div class="seed-wrap">
+    <input type="password" id="seed" placeholder="e.g. correct horse battery staple …" autocomplete="current-password" spellcheck="false">
+    <button type="button" class="eyeball" id="toggle-seed" aria-label="Show seed phrase" title="Show seed phrase">
+      <!-- eye icon -->
+      <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+      <!-- eye-off icon, hidden by default -->
+      <svg id="eye-off-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </svg>
+    </button>
+  </div>
+
+  <label>Generated did:key</label>
+  <div class="preview-box empty" id="didkey-preview">Enter a seed phrase above to generate a key…</div>
+
+  <form method="POST" action="/delegations/self-service" id="scope-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="jwt" id="jwt-field">
+
+    <hr class="sep">
+    <label for="host_pattern">Host pattern</label>
+    <p class="hint">Examples: <code>localhost:8080</code>, <code>*.example.com</code></p>
+    <input type="text" id="host_pattern" name="host_pattern" placeholder="localhost:8080" class="grant-input" required>
+
+    <label for="path_pattern">Path pattern</label>
+    <p class="hint">Examples: <code>/api/*</code>, <code>/*</code></p>
+    <input type="text" id="path_pattern" name="path_pattern" placeholder="/*" value="/*" class="grant-input" required>
+
+    <label>Methods</label>
+    <div class="method-row">
+      <label class="cb-label"><input type="checkbox" name="methods" value="GET" checked> GET</label>
+      <label class="cb-label"><input type="checkbox" name="methods" value="HEAD"> HEAD</label>
+      <label class="cb-label"><input type="checkbox" name="methods" value="POST"> POST</label>
+      <label class="cb-label"><input type="checkbox" name="methods" value="PUT"> PUT</label>
+      <label class="cb-label"><input type="checkbox" name="methods" value="PATCH"> PATCH</label>
+      <label class="cb-label"><input type="checkbox" name="methods" value="DELETE"> DELETE</label>
+    </div>
+
+    <div class="row-2">
+      <div>
+        <label for="breadth">Breadth</label>
+        <select id="breadth" name="breadth">
+          <option value="agent">agent &mdash; all sessions</option>
+          <option value="session">session &mdash; until browser closes</option>
+          <option value="once">once &mdash; single request</option>
+        </select>
+      </div>
+      <div>
+        <label for="ttl">Expiry</label>
+        <select id="ttl" name="ttl">
+          <option value="4h">4 hours</option>
+          <option value="2d">2 days</option>
+          <option value="90d">90 days</option>
+          <option value="400d">400 days</option>
+          <option value="indefinite">Indefinite</option>
+        </select>
+      </div>
+    </div>
+
+    <button type="submit" id="submit-btn" disabled>Register Key &amp; Grant Access</button>
+  </form>
+</div>
+
+<script type="module">
+// ── Ed25519 via @noble/curves (well-audited, MIT-licensed) ────────────────────
+import { ed25519 } from 'https://esm.sh/@noble/curves@1.8.1/ed25519';
+
+// ── base58btc encode ──────────────────────────────────────────────────────────
+const BASE58_CHARS = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function base58Encode(bytes) {
+  let num = 0n;
+  for (const byte of bytes) {
+    num = (num << 8n) | BigInt(byte);
+  }
+  let result = '';
+  const base = 58n;
+  while (num > 0n) {
+    result = BASE58_CHARS[Number(num % base)] + result;
+    num /= base;
+  }
+  // Preserve leading zero bytes as '1' characters.
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    result = '1' + result;
+  }
+  return result;
+}
+
+// ── did:key construction ──────────────────────────────────────────────────────
+// Ed25519 multicodec prefix: 0xed 0x01 (varint-encoded 0x1300)
+function toDIDKey(pubKeyBytes) {
+  const multicodec = new Uint8Array([0xed, 0x01, ...pubKeyBytes]);
+  return 'did:key:z' + base58Encode(multicodec);
+}
+
+// ── base64url ─────────────────────────────────────────────────────────────────
+function base64urlEncode(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64urlEncodeJSON(obj) {
+  return base64urlEncode(new TextEncoder().encode(JSON.stringify(obj)));
+}
+
+// ── JWT construction ──────────────────────────────────────────────────────────
+// Header is constant: {"alg":"EdDSA","typ":"JWT"}
+const JWT_HEADER = base64urlEncode(new TextEncoder().encode('{"alg":"EdDSA","typ":"JWT"}'));
+
+function buildAndSignJWT(seed, didKey) {
+  const payload = base64urlEncodeJSON({
+    host:   '*',
+    path:   '*',
+    scopes: [didKey],
+    iat:    Math.floor(Date.now() / 1000),
+  });
+  const signingInput = JWT_HEADER + '.' + payload;
+  const message = new TextEncoder().encode(signingInput);
+  const sig = ed25519.sign(message, seed);
+  return signingInput + '.' + base64urlEncode(sig);
+}
+
+// ── UI update ─────────────────────────────────────────────────────────────────
+const seedInput    = document.getElementById('seed');
+const previewEl    = document.getElementById('didkey-preview');
+const jwtField     = document.getElementById('jwt-field');
+const submitBtn    = document.getElementById('submit-btn');
+
+// ── Eyeball toggle ─────────────────────────────────────────────────────────
+const toggleBtn  = document.getElementById('toggle-seed');
+const eyeIcon    = document.getElementById('eye-icon');
+const eyeOffIcon = document.getElementById('eye-off-icon');
+toggleBtn.addEventListener('click', () => {
+  const showing = seedInput.type === 'text';
+  seedInput.type = showing ? 'password' : 'text';
+  eyeIcon.style.display    = showing ? '' : 'none';
+  eyeOffIcon.style.display = showing ? 'none' : '';
+  toggleBtn.setAttribute('aria-label', showing ? 'Show seed phrase' : 'Hide seed phrase');
+  seedInput.focus();
+});
+
+async function update() {
+  const seedStr = seedInput.value.trim();
+  if (!seedStr) {
+    previewEl.textContent = 'Enter a seed phrase above to generate a key…';
+    previewEl.classList.add('empty');
+    jwtField.value = '';
+    submitBtn.disabled = true;
+    return;
+  }
+
+  // Derive 32-byte private key seed via SHA-256 of the seed string.
+  const seedBytes = new TextEncoder().encode(seedStr);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', seedBytes);
+  const seed = new Uint8Array(hashBuffer); // 32 bytes → Ed25519 private key seed
+
+  // Derive Ed25519 public key.
+  const pubKey = ed25519.getPublicKey(seed);
+  const didKey = toDIDKey(pubKey);
+
+  // Build and sign the JWT proving key ownership.
+  const jwt = buildAndSignJWT(seed, didKey);
+
+  previewEl.textContent = didKey;
+  previewEl.classList.remove('empty');
+  jwtField.value = jwt;
+  submitBtn.disabled = false;
+}
+
+// ── EFF Short Wordlist 2.0 (1296 words) ─────────────────────────────────────
+const WORDS = ['aardvark','abandoned','abbreviate','abdomen','abhorrence','abiding','abnormal','abrasion','absorbing','abundant','abyss','academy','accountant','acetone','achiness','acid','acoustics','acquire','acrobat','actress','acuteness','aerosol','aesthetic','affidavit','afloat','afraid','aftershave','again','agency','aggressor','aghast','agitate','agnostic','agonizing','agreeing','aidless','aimlessly','ajar','alarmclock','albatross','alchemy','alfalfa','algae','aliens','alkaline','almanac','alongside','alphabet','already','also','altitude','aluminum','always','amazingly','ambulance','amendment','amiable','ammunition','amnesty','amoeba','amplifier','amuser','anagram','anchor','android','anesthesia','angelfish','animal','anklet','announcer','anonymous','answer','antelope','anxiety','anyplace','aorta','apartment','apnea','apostrophe','apple','apricot','aquamarine','arachnid','arbitrate','ardently','arena','argument','aristocrat','armchair','aromatic','arrowhead','arsonist','artichoke','asbestos','ascend','aseptic','ashamed','asinine','asleep','asocial','asparagus','astronaut','asymmetric','atlas','atmosphere','atom','atrocious','attic','atypical','auctioneer','auditorium','augmented','auspicious','automobile','auxiliary','avalanche','avenue','aviator','avocado','awareness','awhile','awkward','awning','awoke','axially','azalea','babbling','backpack','badass','bagpipe','bakery','balancing','bamboo','banana','barracuda','basket','bathrobe','bazooka','blade','blender','blimp','blouse','blurred','boatyard','bobcat','body','bogusness','bohemian','boiler','bonnet','boots','borough','bossiness','bottle','bouquet','boxlike','breath','briefcase','broom','brushes','bubblegum','buckle','buddhist','buffalo','bullfrog','bunny','busboy','buzzard','cabin','cactus','cadillac','cafeteria','cage','cahoots','cajoling','cakewalk','calculator','camera','canister','capsule','carrot','cashew','cathedral','caucasian','caviar','ceasefire','cedar','celery','cement','census','ceramics','cesspool','chalkboard','cheesecake','chimney','chlorine','chopsticks','chrome','chute','cilantro','cinnamon','circle','cityscape','civilian','clay','clergyman','clipboard','clock','clubhouse','coathanger','cobweb','coconut','codeword','coexistent','coffeecake','cognitive','cohabitate','collarbone','computer','confetti','copier','cornea','cosmetics','cotton','couch','coverless','coyote','coziness','crawfish','crewmember','crib','croissant','crumble','crystal','cubical','cucumber','cuddly','cufflink','cuisine','culprit','cup','curry','cushion','cuticle','cybernetic','cyclist','cylinder','cymbal','cynicism','cypress','cytoplasm','dachshund','daffodil','dagger','dairy','dalmatian','dandelion','dartboard','dastardly','datebook','daughter','dawn','daytime','dazzler','dealer','debris','decal','dedicate','deepness','defrost','degree','dehydrator','deliverer','democrat','dentist','deodorant','depot','deranged','desktop','detergent','device','dexterity','diamond','dibs','dictionary','diffuser','digit','dilated','dimple','dinnerware','dioxide','diploma','directory','dishcloth','ditto','dividers','dizziness','doctor','dodge','doll','dominoes','donut','doorstep','dorsal','double','downstairs','dozed','drainpipe','dresser','driftwood','droppings','drum','dryer','dubiously','duckling','duffel','dugout','dumpster','duplex','durable','dustpan','dutiful','duvet','dwarfism','dwelling','dwindling','dynamite','dyslexia','eagerness','earlobe','easel','eavesdrop','ebook','eccentric','echoless','eclipse','ecosystem','ecstasy','edged','editor','educator','eelworm','eerie','effects','eggnog','egomaniac','ejection','elastic','elbow','elderly','elephant','elfishly','eliminator','elk','elliptical','elongated','elsewhere','elusive','elves','emancipate','embroidery','emcee','emerald','emission','emoticon','emperor','emulate','enactment','enchilada','endorphin','energy','enforcer','engine','enhance','enigmatic','enjoyably','enlarged','enormous','enquirer','enrollment','ensemble','entryway','enunciate','envoy','enzyme','epidemic','equipment','erasable','ergonomic','erratic','eruption','escalator','eskimo','esophagus','espresso','essay','estrogen','etching','eternal','ethics','etiquette','eucalyptus','eulogy','euphemism','euthanize','evacuation','evergreen','evidence','evolution','exam','excerpt','exerciser','exfoliate','exhale','exist','exorcist','explode','exquisite','exterior','exuberant','fabric','factory','faded','failsafe','falcon','family','fanfare','fasten','faucet','favorite','feasibly','february','federal','feedback','feigned','feline','femur','fence','ferret','festival','fettuccine','feudalist','feverish','fiberglass','fictitious','fiddle','figurine','fillet','finalist','fiscally','fixture','flashlight','fleshiness','flight','florist','flypaper','foamless','focus','foggy','folksong','fondue','footpath','fossil','fountain','fox','fragment','freeway','fridge','frosting','fruit','fryingpan','gadget','gainfully','gallstone','gamekeeper','gangway','garlic','gaslight','gathering','gauntlet','gearbox','gecko','gem','generator','geographer','gerbil','gesture','getaway','geyser','ghoulishly','gibberish','giddiness','giftshop','gigabyte','gimmick','giraffe','giveaway','gizmo','glasses','gleeful','glisten','glove','glucose','glycerin','gnarly','gnomish','goatskin','goggles','goldfish','gong','gooey','gorgeous','gosling','gothic','gourmet','governor','grape','greyhound','grill','groundhog','grumbling','guacamole','guerrilla','guitar','gullible','gumdrop','gurgling','gusto','gutless','gymnast','gynecology','gyration','habitat','hacking','haggard','haiku','halogen','hamburger','handgun','happiness','hardhat','hastily','hatchling','haughty','hazelnut','headband','hedgehog','hefty','heinously','helmet','hemoglobin','henceforth','herbs','hesitation','hexagon','hubcap','huddling','huff','hugeness','hullabaloo','human','hunter','hurricane','hushing','hyacinth','hybrid','hydrant','hygienist','hypnotist','ibuprofen','icepack','icing','iconic','identical','idiocy','idly','igloo','ignition','iguana','illuminate','imaging','imbecile','imitator','immigrant','imprint','iodine','ionosphere','ipad','iphone','iridescent','irksome','iron','irrigation','island','isotope','issueless','italicize','itemizer','itinerary','itunes','ivory','jabbering','jackrabbit','jaguar','jailhouse','jalapeno','jamboree','janitor','jarring','jasmine','jaundice','jawbreaker','jaywalker','jazz','jealous','jeep','jelly','jeopardize','jersey','jetski','jezebel','jiffy','jigsaw','jingling','jobholder','jockstrap','jogging','john','joinable','jokingly','journal','jovial','joystick','jubilant','judiciary','juggle','juice','jujitsu','jukebox','jumpiness','junkyard','juror','justifying','juvenile','kabob','kamikaze','kangaroo','karate','kayak','keepsake','kennel','kerosene','ketchup','khaki','kickstand','kilogram','kimono','kingdom','kiosk','kissing','kite','kleenex','knapsack','kneecap','knickers','koala','krypton','laboratory','ladder','lakefront','lantern','laptop','laryngitis','lasagna','latch','laundry','lavender','laxative','lazybones','lecturer','leftover','leggings','leisure','lemon','length','leopard','leprechaun','lettuce','leukemia','levers','lewdness','liability','library','licorice','lifeboat','lightbulb','likewise','lilac','limousine','lint','lioness','lipstick','liquid','listless','litter','liverwurst','lizard','llama','luau','lubricant','lucidity','ludicrous','luggage','lukewarm','lullaby','lumberjack','lunchbox','luridness','luscious','luxurious','lyrics','macaroni','maestro','magazine','mahogany','maimed','majority','makeover','malformed','mammal','mango','mapmaker','marbles','massager','matchstick','maverick','maximum','mayonnaise','moaning','mobilize','moccasin','modify','moisture','molecule','momentum','monastery','moonshine','mortuary','mosquito','motorcycle','mousetrap','movie','mower','mozzarella','muckiness','mudflow','mugshot','mule','mummy','mundane','muppet','mural','mustard','mutation','myriad','myspace','myth','nail','namesake','nanosecond','napkin','narrator','nastiness','natives','nautically','navigate','nearest','nebula','nectar','nefarious','negotiator','neither','nemesis','neoliberal','nephew','nervously','nest','netting','neuron','nevermore','nextdoor','nicotine','niece','nimbleness','nintendo','nirvana','nuclear','nugget','nuisance','nullify','numbing','nuptials','nursery','nutcracker','nylon','oasis','oat','obediently','obituary','object','obliterate','obnoxious','observer','obtain','obvious','occupation','oceanic','octopus','ocular','office','oftentimes','oiliness','ointment','older','olympics','omissible','omnivorous','oncoming','onion','onlooker','onstage','onward','onyx','oomph','opaquely','opera','opium','opossum','opponent','optical','opulently','oscillator','osmosis','ostrich','otherwise','ought','outhouse','ovation','oven','owlish','oxford','oxidize','oxygen','oyster','ozone','pacemaker','padlock','pageant','pajamas','palm','pamphlet','pantyhose','paprika','parakeet','passport','patio','pauper','pavement','payphone','pebble','peculiarly','pedometer','pegboard','pelican','penguin','peony','pepperoni','peroxide','pesticide','petroleum','pewter','pharmacy','pheasant','phonebook','phrasing','physician','plank','pledge','plotted','plug','plywood','pneumonia','podiatrist','poetic','pogo','poison','poking','policeman','poncho','popcorn','porcupine','postcard','poultry','powerboat','prairie','pretzel','princess','propeller','prune','pry','pseudo','psychopath','publisher','pucker','pueblo','pulley','pumpkin','punchbowl','puppy','purse','pushup','putt','puzzle','pyramid','python','quarters','quesadilla','quilt','quote','racoon','radish','ragweed','railroad','rampantly','rancidity','rarity','raspberry','ravishing','rearrange','rebuilt','receipt','reentry','refinery','register','rehydrate','reimburse','rejoicing','rekindle','relic','remote','renovator','reopen','reporter','request','rerun','reservoir','retriever','reunion','revolver','rewrite','rhapsody','rhetoric','rhino','rhubarb','rhyme','ribbon','riches','ridden','rigidness','rimmed','riptide','riskily','ritzy','riverboat','roamer','robe','rocket','romancer','ropelike','rotisserie','roundtable','royal','rubber','rudderless','rugby','ruined','rulebook','rummage','running','rupture','rustproof','sabotage','sacrifice','saddlebag','saffron','sainthood','saltshaker','samurai','sandworm','sapphire','sardine','sassy','satchel','sauna','savage','saxophone','scarf','scenario','schoolbook','scientist','scooter','scrapbook','sculpture','scythe','secretary','sedative','segregator','seismology','selected','semicolon','senator','septum','sequence','serpent','sesame','settler','severely','shack','shelf','shirt','shovel','shrimp','shuttle','shyness','siamese','sibling','siesta','silicon','simmering','singles','sisterhood','sitcom','sixfold','sizable','skateboard','skeleton','skies','skulk','skylight','slapping','sled','slingshot','sloth','slumbering','smartphone','smelliness','smitten','smokestack','smudge','snapshot','sneezing','sniff','snowsuit','snugness','speakers','sphinx','spider','splashing','sponge','sprout','spur','spyglass','squirrel','statue','steamboat','stingray','stopwatch','strawberry','student','stylus','suave','subway','suction','suds','suffocate','sugar','suitcase','sulphur','superstore','surfer','sushi','swan','sweatshirt','swimwear','sword','sycamore','syllable','symphony','synagogue','syringes','systemize','tablespoon','taco','tadpole','taekwondo','tagalong','takeout','tallness','tamale','tanned','tapestry','tarantula','tastebud','tattoo','tavern','thaw','theater','thimble','thorn','throat','thumb','thwarting','tiara','tidbit','tiebreaker','tiger','timid','tinsel','tiptoeing','tirade','tissue','tractor','tree','tripod','trousers','trucks','tryout','tubeless','tuesday','tugboat','tulip','tumbleweed','tupperware','turtle','tusk','tutorial','tuxedo','tweezers','twins','tyrannical','ultrasound','umbrella','umpire','unarmored','unbuttoned','uncle','underwear','unevenness','unflavored','ungloved','unhinge','unicycle','unjustly','unknown','unlocking','unmarked','unnoticed','unopened','unpaved','unquenched','unroll','unscrewing','untied','unusual','unveiled','unwrinkled','unyielding','unzip','upbeat','upcountry','update','upfront','upgrade','upholstery','upkeep','upload','uppercut','upright','upstairs','uptown','upwind','uranium','urban','urchin','urethane','urgent','urologist','username','usher','utensil','utility','utmost','utopia','utterance','vacuum','vagrancy','valuables','vanquished','vaporizer','varied','vaseline','vegetable','vehicle','velcro','vendor','vertebrae','vestibule','veteran','vexingly','vicinity','videogame','viewfinder','vigilante','village','vinegar','violin','viperfish','virus','visor','vitamins','vivacious','vixen','vocalist','vogue','voicemail','volleyball','voucher','voyage','vulnerable','waffle','wagon','wakeup','walrus','wanderer','wasp','water','waving','wheat','whisper','wholesaler','wick','widow','wielder','wifeless','wikipedia','wildcat','windmill','wipeout','wired','wishbone','wizardry','wobbliness','wolverine','womb','woolworker','workbasket','wound','wrangle','wreckage','wristwatch','wrongdoing','xerox','xylophone','yacht','yahoo','yard','yearbook','yesterday','yiddish','yield','yo-yo','yodel','yogurt','yuppie','zealot','zebra','zeppelin','zestfully','zigzagged','zillion','zipping','zirconium','zodiac','zombie','zookeeper','zucchini'];
+
+// ── Generate seed from wordlist ───────────────────────────────────────────────
+function generateSeed() {
+  const indices = new Uint32Array(12);
+  crypto.getRandomValues(indices);
+  return Array.from(indices, i => WORDS[i % WORDS.length]).join(' ');
+}
+
+document.getElementById('gen-seed').addEventListener('click', () => {
+  seedInput.value = generateSeed();
+  update();
+  seedInput.focus();
+});
+
+seedInput.addEventListener('input', update);
+
+// Regenerate the JWT right before submit to ensure iat is fresh.
+document.getElementById('scope-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await update();
+  if (!submitBtn.disabled) {
+    e.target.submit();
+  }
+});
+</script>
+</body>
+</html>

@@ -22,12 +22,14 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 
 	// Set up delegation infrastructure
 	store := NewInMemoryDelegationStore()
+	scopeStore := NewInMemoryPrincipalScopeStore()
 
 	ss := &SessionsServer{
 		DelegationURLSecret:    cfg.DelegationURLSecret,
 		IdDerivationSecret:     cfg.IdDerivationSecret,
 		DelegationHeaderPubKey: cfg.DelegationHeaderPub,
 		Store:                  store,
+		ScopeStore:             scopeStore,
 		// ⚠️  SECURITY WARNING ⚠️
 		// PermissiveScopeAuthorizer allows ANY principal to grant themselves ANY scopes.
 		// This is ONLY safe for localhost (127.0.0.1) development.

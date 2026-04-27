@@ -2,9 +2,51 @@ package delegation
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
+
+// PrincipalScopeStore persists did:key scopes that a principal has proven
+// ownership of via a self-signed scope claim JWT.
+type PrincipalScopeStore interface {
+	GetPrincipalScopes(principalID string) ([]string, error)
+	AddPrincipalScope(principalID, scope string) error
+}
+
+// InMemoryPrincipalScopeStore is a thread-safe in-memory PrincipalScopeStore.
+type InMemoryPrincipalScopeStore struct {
+	mu     sync.RWMutex
+	scopes map[string][]string // principalID → []scope
+}
+
+// NewInMemoryPrincipalScopeStore creates a new empty in-memory scope store.
+func NewInMemoryPrincipalScopeStore() *InMemoryPrincipalScopeStore {
+	return &InMemoryPrincipalScopeStore{
+		scopes: make(map[string][]string),
+	}
+}
+
+// GetPrincipalScopes returns all scopes registered for a principal.
+func (s *InMemoryPrincipalScopeStore) GetPrincipalScopes(principalID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	existing := s.scopes[principalID]
+	out := make([]string, len(existing))
+	copy(out, existing)
+	return out, nil
+}
+
+// AddPrincipalScope adds a scope to a principal's scope set (idempotent).
+func (s *InMemoryPrincipalScopeStore) AddPrincipalScope(principalID, scope string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slices.Contains(s.scopes[principalID], scope) {
+		return nil // already present, no-op
+	}
+	s.scopes[principalID] = append(s.scopes[principalID], scope)
+	return nil
+}
 
 // InMemoryDelegationStore is a thread-safe in-memory DelegationStore for development/testing.
 type InMemoryDelegationStore struct {

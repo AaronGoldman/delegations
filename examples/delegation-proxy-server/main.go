@@ -9,6 +9,8 @@
 //	GET  /delegations/ask?token=… Delegation grant UI (shown to the user in a browser).
 //	POST /delegations/grant       Processes the grant form submission (CSRF protected).
 //	GET  /delegations             Lists all active grants.
+//	GET  /delegations/self-service Prove did:key ownership + create a self-granted delegation.
+//	POST /delegations/self-service Process the self-service form (key registration + grant).
 package main
 
 import (
@@ -46,6 +48,7 @@ func main() {
 	log.Printf("  GET  %s/delegations/ask?token=…   — grant approval UI", baseURL)
 	log.Printf("  GET  %s/delegations                — list active grants", baseURL)
 	log.Printf("  GET  %s/delegations/key            — Ed25519 public key for Authorization: Bearer", baseURL)
+	log.Printf("  GET  %s/delegations/self-service — register did:key + self-grant access", baseURL)
 
 	srv := &http.Server{
 		Addr:         listenAddr,
