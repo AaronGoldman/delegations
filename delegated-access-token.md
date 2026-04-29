@@ -5,6 +5,9 @@
 
 ## Abstract
 
+Recognize: To know again.
+the core idea is to set a cookie on first touch and the grant capabilities to that recognizable agent.
+
 This specification defines a **Principal-Agent Delegation** mechanism for AI agents and automated systems. A *principal* is the human (or trusted system) who authorizes access; an *agent* is the automated system acting on the principal's behalf. The specification enables agents to request access to protected resources through principal-mediated browser-based authorization, without requiring the agent to handle the principal's credentials directly. The core flow uses HttpOnly cookies, RFC7807-compliant error responses, and JWT-based delegation requests to provide secure, auditable, and principal-controlled authorization.
 
 ## Status of this Document
