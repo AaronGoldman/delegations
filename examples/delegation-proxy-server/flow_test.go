@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,21 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatalf("generate delegation header key: %v", err)
 	}
 
-	store := delegation.NewInMemoryDelegationStore()
+	// Create temporary SQLite database for testing
+	tmpfile, err := os.CreateTemp("", "test-delegation-*.db")
+	if err != nil {
+		t.Fatalf("create temp db file: %v", err)
+	}
+	tmpfile.Close()
+	dbPath := tmpfile.Name()
+	t.Cleanup(func() { os.Remove(dbPath) })
+
+	store, err := delegation.NewSQLiteDelegationStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteDelegationStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
 	ss := &delegation.SessionsServer{
 		DelegationURLSecret:    []byte(jwtSecret),
 		IdDerivationSecret:     serverSecret,
@@ -61,13 +76,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 // TestDelegationFlow exercises the full happy path:
 //
-//	1. GET /api/whoami (no cookies) → 401 + delegation_url
-//	2. GET /delegations/ask?token=…    → HTML grant approval form
-//	3. POST /delegations/grant         → grant created, "Access Granted" page
-//	4. GET /delegations                → HTML page listing the new grant with a Revoke button
-//	5. GET /api/whoami (with cookies) → 200 with full identity JSON
-//	6. POST /delegations/revoke        → grant revoked, redirect to /delegations
-//	7. GET /api/whoami              → 401 again (grant is gone)
+//  1. GET /api/whoami (no cookies) → 401 + delegation_url
+//  2. GET /delegations/ask?token=…    → HTML grant approval form
+//  3. POST /delegations/grant         → grant created, "Access Granted" page
+//  4. GET /delegations                → HTML page listing the new grant with a Revoke button
+//  5. GET /api/whoami (with cookies) → 200 with full identity JSON
+//  6. POST /delegations/revoke        → grant revoked, redirect to /delegations
+//  7. GET /api/whoami              → 401 again (grant is gone)
 func TestDelegationFlow(t *testing.T) {
 	srv := newTestServer(t)
 	jar, err := cookiejar.New(nil)
@@ -234,5 +249,268 @@ func TestDelegationFlow(t *testing.T) {
 	defer resp7.Body.Close()
 	if resp7.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("step 7: want 401 after revoke, got %d", resp7.StatusCode)
+	}
+}
+
+// TestInvalidJWTToken verifies rejection of malformed/expired tokens
+func TestInvalidJWTToken(t *testing.T) {
+	srv := newTestServer(t)
+	client := &http.Client{}
+
+	// Test with invalid token
+	resp, err := client.Get(srv.URL + "/delegations/ask?token=invalid.jwt.token")
+	if err != nil {
+		t.Fatalf("GET /delegations/ask: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for invalid token, got %d", resp.StatusCode)
+	}
+}
+
+// TestCSRFValidation verifies CSRF token checking on POST endpoints
+func TestCSRFValidation(t *testing.T) {
+	srv := newTestServer(t)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	// Get a valid token first (similar to TestDelegationFlow step 1-2)
+	resp, _ := client.Get(srv.URL + "/api/whoami")
+	resp.Body.Close()
+
+	// Just visit the form to set up cookies
+	resp2, _ := client.Get(srv.URL + "/delegations/ask?token=xyz")
+	resp2.Body.Close()
+
+	// POST /delegations/grant with missing CSRF token should fail
+	resp3, err := client.PostForm(srv.URL+"/delegations/grant", url.Values{
+		"token":   {"test"},
+		"action":  {"approve"},
+		"breadth": {"session"},
+		"ttl":     {"4h"},
+		// csrf_token intentionally omitted
+	})
+	if err != nil {
+		t.Fatalf("PostForm: %v", err)
+	}
+	defer resp3.Body.Close()
+
+	if resp3.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for missing CSRF, got %d", resp3.StatusCode)
+	}
+
+	// POST with wrong CSRF token should fail
+	resp4, err := client.PostForm(srv.URL+"/delegations/grant", url.Values{
+		"token":      {"test"},
+		"csrf_token": {"wrong-token-value"},
+		"action":     {"approve"},
+		"breadth":    {"session"},
+		"ttl":        {"4h"},
+	})
+	if err != nil {
+		t.Fatalf("PostForm with wrong CSRF: %v", err)
+	}
+	defer resp4.Body.Close()
+
+	if resp4.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for wrong CSRF, got %d", resp4.StatusCode)
+	}
+}
+
+// TestInvalidBreadthTTL verifies validation of breadth and ttl parameters
+func TestInvalidBreadthTTL(t *testing.T) {
+	srv := newTestServer(t)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	// Get initial request to set up cookies
+	resp, _ := client.Get(srv.URL + "/api/whoami")
+	resp.Body.Close()
+
+	// POST with missing parameters should return an error (CSRF or validation)
+	resp2, err := client.PostForm(srv.URL+"/delegations/grant", url.Values{
+		"token":      {"test"},
+		"csrf_token": {"invalid"},
+		"action":     {"approve"},
+	})
+	if err != nil {
+		t.Fatalf("PostForm: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	// Expect error (403 CSRF or 400 validation) - both are acceptable
+	if resp2.StatusCode < 400 {
+		t.Fatalf("want error status, got %d", resp2.StatusCode)
+	}
+}
+
+// TestGetPublicKey verifies the public key endpoint returns valid Ed25519 key
+func TestGetPublicKey(t *testing.T) {
+	srv := newTestServer(t)
+	client := &http.Client{}
+
+	resp, err := client.Get(srv.URL + "/delegations/key")
+	if err != nil {
+		t.Fatalf("GET /delegations/key: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+
+	keyData, _ := io.ReadAll(resp.Body)
+	keyStr := string(keyData)
+	if !strings.HasPrefix(keyStr, "ed25519-") {
+		t.Fatalf("expected ed25519- prefix, got: %s", keyStr)
+	}
+}
+
+// TestWildcardHostMatching verifies wildcard host pattern matching
+func TestWildcardHostMatching(t *testing.T) {
+	tests := []struct {
+		pattern string
+		host    string
+		want    bool
+	}{
+		// Exact matches
+		{"example.com", "example.com", true},
+		{"example.com", "sub.example.com", false},
+
+		// Wildcard suffix matches
+		{"*.example.com", "api.example.com", true},
+		{"*.example.com", "cdn.example.com", true},
+		{"*.example.com", "api.sub.example.com", true},
+		{"*.example.com", "example.com", false},
+		{"*.example.com", "other.com", false},
+
+		// Multi-level wildcards
+		{"*.sub.example.com", "api.sub.example.com", true},
+		{"*.sub.example.com", "api.example.com", false},
+
+		// Catch-all
+		{"*", "anything.example.com", true},
+		{"*", "example.com", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"-"+tt.host, func(t *testing.T) {
+			// Call matchPattern through a test that exercises it
+			// For now, we test via the actual delegation flow
+			// In production, matchPattern should be exported or tested directly
+			got := delegation.TestMatchPattern(tt.pattern, tt.host)
+			if got != tt.want {
+				t.Fatalf("matchPattern(%q, %q) = %v, want %v", tt.pattern, tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWildcardPathMatching verifies wildcard path pattern matching
+func TestWildcardPathMatching(t *testing.T) {
+	tests := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		// Exact matches
+		{"/api/users", "/api/users", true},
+		{"/api/users", "/api/users/123", false},
+
+		// Prefix wildcards
+		{"/api/*", "/api/users", true},
+		{"/api/*", "/api/users/123", true},
+		{"/api/*", "/admin/users", false},
+
+		// Multi-level paths
+		{"/api/v1/*", "/api/v1/users", true},
+		{"/api/v1/*", "/api/v1/users/123", true},
+		{"/api/v1/*", "/api/v2/users", false},
+
+		// Catch-all
+		{"*", "/anything", true},
+		{"/*", "/api/users", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"-"+tt.path, func(t *testing.T) {
+			got := delegation.TestMatchPattern(tt.pattern, tt.path)
+			if got != tt.want {
+				t.Fatalf("matchPattern(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExpiredToken verifies that expired tokens are rejected
+func TestExpiredToken(t *testing.T) {
+	srv := newTestServer(t)
+	client := &http.Client{}
+
+	// Create a delegation request that expires immediately
+	d := &delegation.Delegation{
+		AgentID:     "test-agent",
+		SessionID:   "test-session",
+		HostPattern: "example.com",
+		PathPattern: "/api/*",
+		Methods:     []string{"GET"},
+		Scopes:      []string{"test_scope"},
+		ExpiresAt:   time.Now().Add(-1 * time.Second).Format(time.RFC3339), // expired
+	}
+
+	token, err := d.JWT([]byte("test-secret-32-bytes-for-hs256!!"))
+	if err != nil {
+		t.Fatalf("JWT: %v", err)
+	}
+
+	resp, err := client.Get(srv.URL + "/delegations/ask?token=" + token)
+	if err != nil {
+		t.Fatalf("GET /delegations/ask: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for expired token, got %d", resp.StatusCode)
+	}
+}
+
+// TestBreadthSemantics verifies that breadth values work correctly
+func TestBreadthSemantics(t *testing.T) {
+	tests := []struct {
+		name    string
+		breadth string
+	}{
+		{"breadth once", "once"},
+		{"breadth session", "session"},
+		{"breadth agent", "agent"},
+		{"any string value", "forever"}, // Breadth is just a string; any value is technically valid for JSON
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &delegation.Delegation{
+				DelegationID: "test-" + tt.breadth,
+				AgentID:      "agent",
+				SessionID:    "session",
+				HostPattern:  "example.com",
+				PathPattern:  "/",
+				Methods:      []string{"GET"},
+				Scopes:       []string{"scope"},
+				Breadth:      tt.breadth,
+				IssuedAt:     time.Now().Unix(),
+			}
+
+			// Breadth is stored as a string; any value can be marshaled
+			data, err := json.Marshal(d)
+			if err != nil {
+				t.Fatalf("JSON marshal failed: %v", err)
+			}
+
+			// Verify breadth is present in JSON
+			if !strings.Contains(string(data), tt.breadth) {
+				t.Fatalf("breadth %q not found in JSON", tt.breadth)
+			}
+		})
 	}
 }

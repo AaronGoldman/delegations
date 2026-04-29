@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -27,8 +28,7 @@ type SessionsServer struct {
 	IdDerivationSecret     string
 	DelegationHeaderPubKey ed25519.PublicKey
 	Store                  DelegationStore
-	ScopeStore             PrincipalScopeStore // stores principal-owned did:key scopes
-	ScopeAuthorizer        ScopeAuthorizer     // validates principal authorization for requested scopes
+	ScopeAuthorizer        ScopeAuthorizer // validates principal authorization for requested scopes
 }
 
 var tmplFuncs = template.FuncMap{
@@ -187,21 +187,24 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue or refresh the principal_cookie — identifies the human approving the grant.
-	principalVal := NewUUIDv4()
-	if c, _ := r.Cookie(principalCookieName); c != nil {
-		principalVal = c.Value
+	// Use agent_cookie to identify the principal (human approving the grant).
+	// The agent_cookie is set by the middleware and persists across sessions.
+	agentVal := ""
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
+		agentVal = c.Value
+	} else {
+		agentVal = NewUUIDv4()
+		http.SetCookie(w, &http.Cookie{
+			Name:     "agent_cookie",
+			Value:    agentVal,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+			MaxAge:   365 * 24 * 60 * 60, // 1 year
+		})
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     principalCookieName,
-		Value:    principalVal,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		Path:     "/",
-		MaxAge:   365 * 24 * 60 * 60, // 1 year, refreshed on each visit
-	})
-	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
+	principalID, err := deriveID(s.IdDerivationSecret, agentVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -295,11 +298,12 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var principalVal string
-	if c, _ := r.Cookie(principalCookieName); c != nil {
-		principalVal = c.Value
+	// Use agent_cookie to derive principal ID
+	agentVal := ""
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
+		agentVal = c.Value
 	}
-	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
+	principalID, err := deriveID(s.IdDerivationSecret, agentVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -402,9 +406,9 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract principal ID from cookie
+	// Extract principal ID from agent_cookie
 	principalID := ""
-	if c, _ := r.Cookie(principalCookieName); c != nil {
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
 		if id, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
 			principalID = id
 		}
@@ -565,11 +569,11 @@ func (s *SessionsServer) selfServiceHandler(w http.ResponseWriter, r *http.Reque
 func (s *SessionsServer) showSelfService(w http.ResponseWriter, r *http.Request) {
 	// Issue or refresh agent_cookie — identifies this device.
 	agentVal := NewUUIDv4()
-	if c, _ := r.Cookie(agentCookieName); c != nil {
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
 		agentVal = c.Value
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     agentCookieName,
+		Name:     "agent_cookie",
 		Value:    agentVal,
 		HttpOnly: true,
 		Secure:   true,
@@ -589,21 +593,8 @@ func (s *SessionsServer) showSelfService(w http.ResponseWriter, r *http.Request)
 		sessionVal = c.Value
 	}
 	setSessionCookie(w, sessionVal)
-	// Issue or refresh principal_cookie — identifies the human.
-	principalVal := NewUUIDv4()
-	if c, _ := r.Cookie(principalCookieName); c != nil {
-		principalVal = c.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     principalCookieName,
-		Value:    principalVal,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		Path:     "/",
-		MaxAge:   365 * 24 * 60 * 60,
-	})
-	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
+	// Derive principal ID from agent_cookie (already have agentVal from above)
+	principalID, err := deriveID(s.IdDerivationSecret, agentVal)
 	if err != nil {
 		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -624,11 +615,22 @@ func (s *SessionsServer) showSelfService(w http.ResponseWriter, r *http.Request)
 		Path:     "/",
 		MaxAge:   600,
 	})
-	scopes, err := s.ScopeStore.GetPrincipalScopes(principalID)
+	// Fetch did:key scopes from delegations
+	delegations, err := s.Store.ListDelegations()
 	if err != nil {
-		log.Printf("ERROR GetPrincipalScopes: %v", err)
+		log.Printf("ERROR ListDelegations: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+	var scopes []string
+	for _, d := range delegations {
+		if d.PrincipalID == principalID {
+			for _, scope := range d.Scopes {
+				if strings.HasPrefix(scope, "did:key:") && !slices.Contains(scopes, scope) {
+					scopes = append(scopes, scope)
+				}
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := selfServiceTemplate.Execute(w, selfServicePageData{
@@ -654,36 +656,23 @@ func (s *SessionsServer) processSelfService(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "CSRF validation failed", http.StatusForbidden)
 		return
 	}
-	// Require principal cookie.
-	principalVal := ""
-	if c, _ := r.Cookie(principalCookieName); c != nil {
-		principalVal = c.Value
-	}
-	if principalVal == "" {
-		http.Error(w, "no principal cookie — visit /delegations/self-service first", http.StatusUnauthorized)
-		return
-	}
-	principalID, err := deriveID(s.IdDerivationSecret, principalVal)
-	if err != nil {
-		log.Printf("ERROR deriveID(principal): %v", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	// Require agent cookie.
-	agentVal := ""
-	if c, _ := r.Cookie(agentCookieName); c != nil {
+	// Get principal ID from agent_cookie.
+	var agentVal string
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
 		agentVal = c.Value
 	}
 	if agentVal == "" {
 		http.Error(w, "no agent cookie — visit /delegations/self-service first", http.StatusUnauthorized)
 		return
 	}
-	agentID, err := deriveID(s.IdDerivationSecret, agentVal)
+	principalID, err := deriveID(s.IdDerivationSecret, agentVal)
 	if err != nil {
-		log.Printf("ERROR deriveID(agent): %v", err)
+		log.Printf("ERROR deriveID(principal): %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	// agentID is the same as principalID (unified from agent_cookie)
+	agentID := principalID
 	// Session ID (may be empty for breadth=agent grants).
 	sessionID := ""
 	if c, _ := r.Cookie(sessionCookieName); c != nil {
@@ -701,12 +690,6 @@ func (s *SessionsServer) processSelfService(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		log.Printf("REJECT self-service principal=%s: %v", principalID, err)
 		http.Error(w, "invalid scope claim JWT: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Register the did:key scope on the principal.
-	if err := s.ScopeStore.AddPrincipalScope(principalID, didKey); err != nil {
-		log.Printf("ERROR AddPrincipalScope: %v", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	// Validate grant fields.

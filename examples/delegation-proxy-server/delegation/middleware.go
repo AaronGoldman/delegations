@@ -20,16 +20,18 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 		return nil, nil, err
 	}
 
-	// Set up delegation infrastructure
-	store := NewInMemoryDelegationStore()
-	scopeStore := NewInMemoryPrincipalScopeStore()
+	// Set up delegation infrastructure. Grants are persisted to a local SQLite
+	// database so they survive restarts.
+	store, err := NewSQLiteDelegationStore("db.sqlite3")
+	if err != nil {
+		return nil, nil, fmt.Errorf("open delegation store: %w", err)
+	}
 
 	ss := &SessionsServer{
 		DelegationURLSecret:    cfg.DelegationURLSecret,
 		IdDerivationSecret:     cfg.IdDerivationSecret,
 		DelegationHeaderPubKey: cfg.DelegationHeaderPub,
 		Store:                  store,
-		ScopeStore:             scopeStore,
 		// ⚠️  SECURITY WARNING ⚠️
 		// PermissiveScopeAuthorizer allows ANY principal to grant themselves ANY scopes.
 		// This is ONLY safe for localhost (127.0.0.1) development.
@@ -54,10 +56,9 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 
 // Cookie and endpoint name constants
 const (
-	agentCookieName     = "agent_cookie"
-	sessionCookieName   = "session_cookie"
-	principalCookieName = "principal_cookie"
-	delegationPath      = "/delegations/ask"
+	agentCookieName   = "agent_cookie"
+	sessionCookieName = "session_cookie"
+	delegationPath    = "/delegations/ask"
 )
 
 // GetAuthInfo reads and verifies the Authorization: Bearer header set by AuthMiddlewareMux.

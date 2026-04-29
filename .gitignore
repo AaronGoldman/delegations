@@ -1,8 +1,15 @@
 config.json
 
-# http tool
-http/http
+# Databases
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 http/cookies.sqlite3
 
+# Binaries
+http/http
+delegated-access-token/examples/delegation-proxy-server/delegation-proxy-server
+
+# http tool
 # macOS
 .DS_Store

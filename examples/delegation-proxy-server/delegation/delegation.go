@@ -23,8 +23,8 @@ type Delegation struct {
 	// JWT claims (spec §5.1).
 	AgentID     string   `json:"agent_id"`
 	SessionID   string   `json:"session_id"`
-	HostPattern string   `json:"host"`    // "api.example.com" or "*.example.com"
-	PathPattern string   `json:"path"`    // "/users/123/messages" or "/users/*"
+	HostPattern string   `json:"host"` // "api.example.com" or "*.example.com"
+	PathPattern string   `json:"path"` // "/users/123/messages" or "/users/*"
 	Methods     []string `json:"methods"`
 	Scopes      []string `json:"scopes"`
 	ExpiresAt   string   `json:"expires_at,omitempty"` // ISO 8601 / RFC 3339
@@ -153,20 +153,20 @@ func (d Delegation) matches(host, path, method string, requiredScopes []string) 
 	return true
 }
 
-// ScopeAuthorizer validates whether a principal is authorized to delegate specific scopes.
+// ScopeAuthorizer validates whether a delegator (principal) is authorized to delegate specific scopes.
 // Implement this interface to wire your corporate identity system (LDAP, OIDC, etc.)
 // into the delegation approval process.
 //
 // The authorizer receives:
-//   - principalID: unique identifier for the authenticated user (derived from principal_cookie)
+//   - principalID: agent_id of the delegator (human approving the grant, derived from agent_cookie)
 //   - scopes: principal URNs from the JWT (e.g., ["urn:contoso:corpuser:aagoldma", "urn:contoso:groupPrincipal(ALL-ENGINEERS)"])
-//   - host: the hostname the principal is requesting access to (from the request context)
-//   - path: the path the principal is requesting access to (from the request context)
-//   - requestedHostPattern: the host pattern the user selected (e.g., "*.example.com")
-//   - requestedPathPattern: the path pattern the user selected (e.g., "/api/*")
+//   - host: the hostname the delegator is requesting access to (from the request context)
+//   - path: the path the delegator is requesting access to (from the request context)
+//   - requestedHostPattern: the host pattern the delegator selected (e.g., "*.example.com")
+//   - requestedPathPattern: the path pattern the delegator selected (e.g., "/api/*")
 //
 // It must return:
-//   - authorized: true if the principal is permitted to delegate these scopes, false otherwise
+//   - authorized: true if the delegator is permitted to delegate these scopes, false otherwise
 //   - reason: if not authorized, a user-friendly message explaining why (e.g., "You can only delegate to /api/*, not /admin/*")
 //   - error: non-nil if authorization cannot be determined
 //
@@ -209,6 +209,11 @@ type DelegationStore interface {
 //	"/users/123/*"         matches /users/123/messages, /users/123/profile, …
 //	"/users/*"             matches /users/123/messages, /users/456/posts, …
 func matchPattern(pattern, value string) bool {
+	// Catch-all wildcard
+	if pattern == "*" {
+		return true
+	}
+
 	if !strings.Contains(pattern, "*") {
 		return pattern == value
 	}
@@ -229,4 +234,10 @@ func matchPattern(pattern, value string) bool {
 
 	// Any other wildcard placement is unsupported → no match.
 	return false
+}
+
+// TestMatchPattern is exported for testing pattern matching logic.
+// It's a test helper; in production code, use matchPattern directly.
+func TestMatchPattern(pattern, value string) bool {
+	return matchPattern(pattern, value)
 }
