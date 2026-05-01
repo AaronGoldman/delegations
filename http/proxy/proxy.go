@@ -74,7 +74,11 @@ func Send(req *http.Request) (*http.Response, error) {
 		req.URL.Host = req.Host
 	}
 
-	client := &http.Client{}
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return client.Do(req)
 }
 
