@@ -11,17 +11,73 @@ import (
 	"github.com/aarongoldman/delegations/http/proxy"
 )
 
+const usageText = `http — cookie-managing HTTP proxy for AI agents
+
+SYNOPSIS
+  http --agent <uuid> --session <uuid>  (HTTP request on stdin, response on stdout)
+
+WHAT THIS TOOL DOES
+  This tool lets an AI agent make authenticated HTTP requests without ever
+  seeing or handling session cookies directly.
+
+  The agent provides its identity via --agent and --session UUIDs. The tool:
+    1. Reads a raw HTTP/1.1 request from stdin.
+    2. Looks up any cookies previously stored for this origin+agent+session
+       and injects them into the outgoing request.
+    3. Sends the request to the target server.
+    4. Saves any Set-Cookie headers from the response into a local SQLite
+       cookie store (cookies.sqlite3 next to the binary).
+    5. Strips HttpOnly Set-Cookie headers from the response before writing
+       it to stdout — the agent never sees those values.
+
+  HttpOnly cookies stay inside this tool for the lifetime of the session.
+  They are added automatically on every outbound request and are never
+  forwarded back to the caller in any response. This prevents accidental
+  leakage of session tokens into logs, tool outputs, or model context.
+
+FLAGS
+  --agent   <uuid>   Agent UUID identifying the calling agent (required).
+                     Used to scope the cookie store so each agent has its
+                     own isolated cookie jar.
+
+  --session <uuid>   Session UUID for this conversation or task (required).
+                     Cookies are scoped per agent+session so a new session
+                     starts with a clean jar.
+
+COOKIE STORAGE
+  Cookies are stored in cookies.sqlite3 in the same directory as the binary.
+  The file is created automatically with mode 0600 on first use.
+  Expired cookies are pruned automatically before each request.
+
+USAGE EXAMPLE
+  printf 'GET /api/whoami HTTP/1.1\r\nHost: example.com\r\n\r\n' \
+    | http --agent 11111111-1111-1111-1111-111111111111 \
+           --session 22222222-2222-2222-2222-222222222222
+
+EXIT CODES
+  0  success
+  1  bad arguments (missing or invalid --agent / --session)
+  2  could not parse stdin as an HTTP request
+  3  network or response-write error
+  4  cookie store error
+
+`
+
 var (
 	agentFlag   = flag.String("agent", "", "Agent UUID (required)")
 	sessionFlag = flag.String("session", "", "Session UUID (required)")
 )
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, usageText)
+	}
 	flag.Parse()
 
 	// Validate required flags
 	if *agentFlag == "" || *sessionFlag == "" {
 		fmt.Fprintf(os.Stderr, "error: both --agent and --session are required\n")
+		fmt.Fprintf(os.Stderr, "Run 'http -h' for usage.\n")
 		os.Exit(1)
 	}
 
