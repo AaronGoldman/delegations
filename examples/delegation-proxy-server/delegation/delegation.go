@@ -187,6 +187,77 @@ func (p *PermissiveScopeAuthorizer) AuthorizeScopes(principalID string, scopes [
 	return true, "", nil
 }
 
+// RestrictedScopeAuthorizer validates that the principal has the required scopes.
+// It allows delegation if:
+//   - A hardcoded did:key is present in the scopes list, OR
+//   - The principalID is present in the scopes list, OR
+//   - The principal has been granted authority (is an agent in an existing delegation)
+//     and can re-grant that delegation
+type RestrictedScopeAuthorizer struct {
+	HardcodedDidKey string          // did:key that bypasses scope checks
+	delegationStore DelegationStore // optional store to check existing delegations
+}
+
+// NewRestrictedScopeAuthorizerFromDidKey creates a RestrictedScopeAuthorizer with a hardcoded did:key.
+func NewRestrictedScopeAuthorizerFromDidKey(didKey string) *RestrictedScopeAuthorizer {
+	return &RestrictedScopeAuthorizer{
+		HardcodedDidKey: didKey,
+	}
+}
+
+// NewRestrictedScopeAuthorizerFromSeed creates a RestrictedScopeAuthorizer by deriving a did:key from a seed.
+// The seed is used to generate an Ed25519 keypair, and the public key is encoded as a did:key.
+func NewRestrictedScopeAuthorizerFromSeed(seed string) *RestrictedScopeAuthorizer {
+	didKey := DIDKeyFromSeed(seed)
+	return &RestrictedScopeAuthorizer{
+		HardcodedDidKey: didKey,
+	}
+}
+
+// NewRestrictedScopeAuthorizerWithStore creates a RestrictedScopeAuthorizer with delegation store access.
+// This allows checking if the principal has been granted authority in existing delegations.
+func NewRestrictedScopeAuthorizerWithStore(didKey string, store DelegationStore) *RestrictedScopeAuthorizer {
+	return &RestrictedScopeAuthorizer{
+		HardcodedDidKey: didKey,
+		delegationStore: store,
+	}
+}
+
+func (r *RestrictedScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
+	// Check if hardcoded did:key is present
+	for _, scope := range scopes {
+		if scope == r.HardcodedDidKey {
+			return true, "", nil
+		}
+	}
+
+	// Check if principal is in scopes
+	for _, scope := range scopes {
+		if scope == principalID {
+			return true, "", nil
+		}
+	}
+
+	// Check if principal has been granted authority (is an agent in existing delegations)
+	// and can re-grant that delegation
+	if r.delegationStore != nil {
+		delegations, err := r.delegationStore.ListDelegations()
+		if err == nil {
+			for _, delegation := range delegations {
+				// If principal is the agent in this delegation, they can re-grant it
+				if delegation.AgentID == principalID {
+					// Verify the requested patterns match or are broader than existing delegation
+					if matchPattern(requestedHostPattern, host) && matchPattern(requestedPathPattern, path) {
+						return true, "", nil
+					}
+				}
+			}
+		}
+	}
+
+	return false, fmt.Sprintf("principal %q is not authorized; required scope not found, hardcoded did:key not in scopes, and no matching delegation grants authority", principalID), nil
+}
+
 // DelegationStore is the persistence interface for delegations.
 // Swap in a database-backed implementation (e.g. database/sql + PostgreSQL) for production.
 type DelegationStore interface {

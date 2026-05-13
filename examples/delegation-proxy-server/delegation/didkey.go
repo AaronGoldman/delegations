@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"math/big"
 	"strings"
@@ -58,4 +59,63 @@ func ParseDIDKey(didKey string) (ed25519.PublicKey, error) {
 			len(pubKeyBytes), ed25519.PublicKeySize)
 	}
 	return ed25519.PublicKey(pubKeyBytes), nil
+}
+
+// base58Encode encodes bytes as base58btc (without a multibase prefix).
+func base58Encode(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	result := new(big.Int).SetBytes(data)
+	base := big.NewInt(58)
+
+	var encoded []byte
+	for result.Sign() > 0 {
+		mod := new(big.Int)
+		result.DivMod(result, base, mod)
+		encoded = append([]byte{base58Alphabet[mod.Int64()]}, encoded...)
+	}
+
+	// Prepend a '1' for each leading zero byte
+	for _, b := range data {
+		if b == 0 {
+			encoded = append([]byte{'1'}, encoded...)
+		} else {
+			break
+		}
+	}
+
+	return string(encoded)
+}
+
+// encodeDIDKey encodes an Ed25519 public key as a did:key URI.
+// Format: did:key:z<base58btc(0xed 0x01 || 32-byte-pubkey)>
+func encodeDIDKey(pubKey ed25519.PublicKey) string {
+	if len(pubKey) != ed25519.PublicKeySize {
+		return ""
+	}
+
+	// Prepend Ed25519 multicodec prefix (0xed 0x01)
+	keyData := append([]byte{0xed, 0x01}, pubKey...)
+
+	// Encode as base58btc
+	encoded := base58Encode(keyData)
+
+	return "did:key:z" + encoded
+}
+
+// DIDKeyFromSeed derives a did:key from a seed string.
+// The seed is hashed to get a 32-byte value, used to generate an Ed25519 keypair,
+// and the public key is encoded as a did:key URI.
+func DIDKeyFromSeed(seed string) string {
+	// Hash the seed to get a 32-byte value for Ed25519
+	hash := sha256.Sum256([]byte(seed))
+
+	// Generate Ed25519 keypair from the seed
+	privKey := ed25519.NewKeyFromSeed(hash[:])
+	pubKey := privKey.Public().(ed25519.PublicKey)
+
+	// Encode public key as did:key
+	return encodeDIDKey(pubKey)
 }
