@@ -41,6 +41,30 @@ var jwtHeaderEdDSA = base64.RawURLEncoding.EncodeToString(
 	[]byte(`{"alg":"EdDSA","typ":"JWT"}`),
 )
 
+const GroupScopePrefix = "urn:posix:group:"
+
+func GroupScope(group string) string {
+	return GroupScopePrefix + group
+}
+
+func IsValidGroupName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for i, r := range name {
+		if !(r == '_' || r == '-' || r == '.' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+		if i == 0 && (r == '.' || r == '-' ) {
+			return false
+		}
+	}
+	if name[len(name)-1] == '.' || name[len(name)-1] == '-' {
+		return false
+	}
+	return true
+}
+
 // JWT creates a compact serialized HS256 JWT from the delegation.
 func (d Delegation) JWT(secret []byte) (string, error) {
 	payload, err := json.Marshal(d)
@@ -263,6 +287,7 @@ func (r *RestrictedScopeAuthorizer) AuthorizeScopes(principalID string, scopes [
 type DelegationStore interface {
 	FindMatching(agentID, sessionID, host, path, method string, scopes []string) (Delegation, bool, error)
 	ListDelegations() ([]Delegation, error)
+	FindDelegationsByScope(scope string) ([]Delegation, error)
 	AddDelegation(d Delegation) error
 	RevokeDelegation(delegationID string) error
 }

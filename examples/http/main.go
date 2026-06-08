@@ -136,17 +136,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Extract origin from the request
-	origin := proxy.ExtractOrigin(req)
+	// Extract request details
+	scheme, hostname, reqPath, origin := proxy.ExtractRequestDetails(req)
 
-	// Delete expired cookies for this origin/agent
-	if err := store.DeleteExpired(origin, *agentFlag); err != nil {
+	// Delete expired cookies for this agent
+	if err := store.DeleteExpired(*agentFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to delete expired cookies: %v\n", err)
 		os.Exit(4)
 	}
 
-	// Look up cookies for this origin/agent/session
-	cookies, err := store.Lookup(origin, *agentFlag, *sessionFlag)
+	// Look up cookies for this request
+	cookies, err := store.Lookup(scheme, hostname, reqPath, *agentFlag, *sessionFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to lookup cookies: %v\n", err)
 		os.Exit(4)

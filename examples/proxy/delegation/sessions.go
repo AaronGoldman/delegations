@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -29,10 +30,13 @@ type SessionsServer struct {
 	DelegationHeaderPubKey ed25519.PublicKey
 	Store                  DelegationStore
 	ScopeAuthorizer        ScopeAuthorizer // validates principal authorization for requested scopes
+	ClaimHost              string          // host pattern for group-claim delegations (default "127.0.0.1")
+	ClaimPath              string          // path pattern for group-claim delegations (default "/delegations/*")
 }
 
 var tmplFuncs = template.FuncMap{
 	"join": strings.Join,
+	"eq":   func(a, b any) bool { return a == b },
 	"toJSON": func(v any) (string, error) {
 		b, err := json.MarshalIndent(v, "", "  ")
 		return string(b), err
@@ -387,17 +391,190 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	w.Write(grantedPage)
 }
 
+func (s *SessionsServer) claimHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.showClaimForm(w, r)
+	case http.MethodPost:
+		s.processClaim(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *SessionsServer) showClaimForm(w http.ResponseWriter, r *http.Request) {
+	csrfToken, err := RandomHex(16)
+	if err != nil {
+		log.Printf("ERROR generating CSRF token: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "claim_csrf",
+		Value:    csrfToken,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+		MaxAge:   600,
+	})
+
+	principalID := ""
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
+		if id, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
+			principalID = id
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := claimTemplate.Execute(w, claimPageData{PrincipalID: principalID, CSRFToken: csrfToken}); err != nil {
+		log.Printf("ERROR rendering claim template: %v", err)
+	}
+}
+
+func (s *SessionsServer) processClaim(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	csrfC, _ := r.Cookie("claim_csrf")
+	csrfForm := r.FormValue("csrf_token")
+	if csrfC == nil || csrfC.Value != csrfForm {
+		http.Error(w, "CSRF validation failed", http.StatusForbidden)
+		return
+	}
+
+	groupName := strings.TrimSpace(r.FormValue("group_name"))
+	if !IsValidGroupName(groupName) {
+		http.Error(w, "invalid group name", http.StatusBadRequest)
+		return
+	}
+
+	scope := GroupScope(groupName)
+
+	principalID := ""
+	agentID := ""
+	if c, _ := r.Cookie("agent_cookie"); c != nil {
+		if id, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
+			principalID = id
+			agentID = id
+		}
+	}
+	if principalID == "" || agentID == "" {
+		http.Error(w, "agent identity required", http.StatusUnauthorized)
+		return
+	}
+
+	delegations, err := s.Store.FindDelegationsByScope(scope)
+	if err != nil {
+		log.Printf("ERROR FindDelegationsByScope: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	for _, d := range delegations {
+		if d.PrincipalID != principalID {
+			http.Error(w, "group already claimed", http.StatusConflict)
+			return
+		}
+	}
+
+	sessionID := ""
+	if c, _ := r.Cookie(sessionCookieName); c != nil {
+		if sid, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
+			sessionID = sid
+		}
+	}
+	if sessionID == "" {
+		sessionID = agentID
+	}
+
+	d := Delegation{
+		DelegationID: NewUUIDv4(),
+		PrincipalID:  principalID,
+		AgentID:      agentID,
+		SessionID:    sessionID,
+		HostPattern:  s.ClaimHost,
+		PathPattern:  s.ClaimPath,
+		Methods:      []string{"GET", "POST"},
+		Scopes:       []string{scope},
+		Breadth:      "agent",
+		IssuedAt:     time.Now().Unix(),
+		ExpiresAt:    "",
+	}
+	if err := s.Store.AddDelegation(d); err != nil {
+		log.Printf("ERROR AddDelegation: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("CLAIM group=%s principal=%s agent=%s delegation=%s", scope, principalID, agentID, d.DelegationID)
+	http.Redirect(w, r, "/delegations", http.StatusSeeOther)
+}
+
 // ── /sessions — active grants list ───────────────────────────────────────────
 
 //go:embed pages/sessions.template.html
 var sessionsHTML string
 
+//go:embed pages/claim.template.html
+var claimHTML string
+
 var sessionsTemplate = template.Must(template.New("sessions").Funcs(tmplFuncs).Parse(sessionsHTML))
+var claimTemplate = template.Must(template.New("claim").Funcs(tmplFuncs).Parse(claimHTML))
+
+type sessionTab struct {
+	ID     string
+	Label  string
+	Grants []Delegation
+}
 
 type sessionsPageData struct {
+	PrincipalID      string
+	AuthorizedGroups []string
+	Tabs             []sessionTab
+	ActiveTab        string
+	CSRFToken        string
+}
+
+type claimPageData struct {
 	PrincipalID string
-	Grants      []Delegation
 	CSRFToken   string
+	GroupName   string
+	Error       string
+}
+
+func groupClaimScopes(delegations []Delegation, agentID, claimHost, claimPath string) []string {
+	set := make(map[string]struct{})
+	for _, d := range delegations {
+		if d.AgentID != agentID {
+			continue
+		}
+		if d.HostPattern != claimHost || d.PathPattern != claimPath {
+			continue
+		}
+		for _, scope := range d.Scopes {
+			if strings.HasPrefix(scope, GroupScopePrefix) {
+				set[scope] = struct{}{}
+			}
+		}
+	}
+
+	scopes := make([]string, 0, len(set))
+	for scope := range set {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	return scopes
+}
+
+func hasScope(scopes []string, target string) bool {
+	for _, scope := range scopes {
+		if scope == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
@@ -406,11 +583,12 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract principal ID from agent_cookie
 	principalID := ""
+	agentID := ""
 	if c, _ := r.Cookie("agent_cookie"); c != nil {
 		if id, err := deriveID(s.IdDerivationSecret, c.Value); err == nil {
 			principalID = id
+			agentID = id
 		}
 	}
 
@@ -436,8 +614,53 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authorizedGroups := groupClaimScopes(delegations, agentID, s.ClaimHost, s.ClaimPath)
+
+	tabs := []sessionTab{
+		{ID: "from_me", Label: "From me", Grants: nil},
+		{ID: "to_me", Label: "To me", Grants: nil},
+		{ID: "from_session", Label: "From session", Grants: nil},
+		{ID: "to_session", Label: "To session", Grants: nil},
+	}
+	groupTabs := make(map[string]*sessionTab, len(authorizedGroups))
+	for _, scope := range authorizedGroups {
+		id := strings.ReplaceAll(scope, ":", "_")
+		id = strings.ReplaceAll(id, "/", "_")
+		tabs = append(tabs, sessionTab{ID: id, Label: scope, Grants: nil})
+		groupTabs[scope] = &tabs[len(tabs)-1]
+	}
+
+	for _, d := range delegations {
+		if d.AgentID == d.PrincipalID {
+			tabs[0].Grants = append(tabs[0].Grants, d)
+		}
+		if d.AgentID == agentID {
+			tabs[1].Grants = append(tabs[1].Grants, d)
+		}
+		if d.SessionID == d.PrincipalID {
+			tabs[2].Grants = append(tabs[2].Grants, d)
+		}
+		if d.SessionID == agentID {
+			tabs[3].Grants = append(tabs[3].Grants, d)
+		}
+		for _, scope := range authorizedGroups {
+			if d.HostPattern != s.ClaimHost || d.PathPattern != s.ClaimPath {
+				continue
+			}
+			if hasScope(d.Scopes, scope) {
+				groupTabs[scope].Grants = append(groupTabs[scope].Grants, d)
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := sessionsTemplate.Execute(w, sessionsPageData{PrincipalID: principalID, Grants: delegations, CSRFToken: csrfToken}); err != nil {
+	if err := sessionsTemplate.Execute(w, sessionsPageData{
+		PrincipalID:      principalID,
+		AuthorizedGroups: authorizedGroups,
+		Tabs:             tabs,
+		ActiveTab:        "to_me",
+		CSRFToken:        csrfToken,
+	}); err != nil {
 		log.Printf("ERROR rendering sessions template: %v", err)
 	}
 }
@@ -771,6 +994,7 @@ func (s *SessionsServer) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/delegations/ask", s.showGrantUI)
 	mux.HandleFunc("/delegations/grant", s.processGrant)
 	mux.HandleFunc("/delegations", s.listGrants)
+	mux.HandleFunc("/delegations/claim", s.claimHandler)
 	mux.HandleFunc("/delegations/key", s.getPublicKey)
 	mux.HandleFunc("/delegations/revoke", s.revokeGrant)
 	mux.HandleFunc("/delegations/self-service", s.selfServiceHandler)

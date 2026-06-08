@@ -597,3 +597,27 @@ when you interact with an AI asistant we have a few componets.
 5) Remote inference
   * large slow LLM on the cloud
   * deep expert skills
+
+
+## wild cards in scpes.
+We asume the format of the scopes is `a:b:c:d...`
+we can put a * at the end `a:b:*`
+If we have no matches for the agent ID that matched the scope then deny
+If we have one or more then we include all the matches in the jwt.
+e.g `urn:username:*` and the user is `urn:username:alise` the we match
+and the `urn:username:alise` is passed down stream.
+Keep in mind that scopes are scoped by domain and path 
+* e.g. `*.api.example.com/path/to/subfolder/*`
+
+
+When we have a actual request we have a 
+host, path, agent_cookie
+1) derive the agent_id from agent_cookie
+2) fins all scope grants that match host, path
+3) find all ACLs that match the host, path
+4) fint the intersection between the grants and the ACLs
+5) mint the JWT with the intersection
+6) if the intersection is not none then forward the request
+   a) else send the deligation url to the client.
+
+  

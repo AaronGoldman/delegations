@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claim a Username</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 680px; margin: 60px auto; padding: 0 20px; color: #111; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: #555; margin-top: 0; margin-bottom: 24px; }
+  .form-box { border: 1px solid #e4e4e7; border-radius: 10px; padding: 24px; background: #fff; }
+  label { display: block; margin-bottom: 10px; font-weight: 600; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.95rem; }
+  button { padding: 10px 20px; border: none; border-radius: 8px; background: #4f46e5; color: white; cursor: pointer; font-size: 0.95rem; }
+  button:hover { background: #4338ca; }
+  .hint { color: #666; margin-bottom: 16px; }
+  .error { border: 1px solid #fecaca; background: #fff1f2; color: #991b1b; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; }
+  .nav { margin-bottom: 24px; font-size: 0.9rem; }
+  .nav a { color: #4f46e5; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="nav"><a href="/delegations">&larr; Active Grants</a></div>
+<h1>Claim a username</h1>
+<p class="subtitle">Create a claim for an unclaimed username and join the matching user group.</p>
+{{if .Error}}
+<div class="error">{{.Error}}</div>
+{{end}}
+<div class="form-box">
+  <form method="POST" action="/delegations/claim">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label for="group_name">Username</label>
+    <input id="group_name" name="group_name" type="text" placeholder="alice" value="{{.GroupName}}" required>
+    <p class="hint">Usernames become group scopes of the form <code>urn:posix:group:&lt;username&gt;</code>.</p>
+    <button type="submit">Claim username</button>
+  </form>
+</div>
+</body>
+</html>

@@ -13,10 +13,9 @@ func ReadRequest(r io.Reader) (*http.Request, error) {
 	return http.ReadRequest(bufio.NewReader(r))
 }
 
-// ExtractOrigin extracts the scheme and host from the request to form an origin.
-// If the scheme is missing, it defaults to "https".
-func ExtractOrigin(req *http.Request) string {
-	scheme := req.URL.Scheme
+// ExtractRequestDetails extracts the scheme, hostname, path, and origin from the request.
+func ExtractRequestDetails(req *http.Request) (scheme, hostname, path, origin string) {
+	scheme = req.URL.Scheme
 	if scheme == "" {
 		scheme = "https"
 	}
@@ -39,7 +38,13 @@ func ExtractOrigin(req *http.Request) string {
 		hostname = host
 	}
 
-	return scheme + "://" + hostname
+	path = req.URL.Path
+	if path == "" {
+		path = "/"
+	}
+
+	origin = scheme + "://" + hostname
+	return
 }
 
 // InjectCookies adds the given cookies to the request's Cookie header.

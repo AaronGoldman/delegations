@@ -32,6 +32,8 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 		IdDerivationSecret:     cfg.IdDerivationSecret,
 		DelegationHeaderPubKey: cfg.DelegationHeaderPub,
 		Store:                  store,
+		ClaimHost:              "127.0.0.1",
+		ClaimPath:              "/delegations/*",
 		// ⚠️  SECURITY WARNING ⚠️
 		// PermissiveScopeAuthorizer allows ANY principal to grant themselves ANY scopes.
 		// This is ONLY safe for localhost (127.0.0.1) development.

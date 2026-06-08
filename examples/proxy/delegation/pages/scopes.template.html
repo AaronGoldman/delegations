@@ -21,8 +21,10 @@
   .seed-wrap input { margin-bottom: 0; width: 100%; }
   .eyeball { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; padding: 4px; color: #6b7280; line-height: 0; }
   .eyeball:hover { color: #4f46e5; }
-  .preview-box { background: #f4f4f5; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 0.82rem; word-break: break-all; min-height: 2.4em; color: #333; margin-bottom: 14px; }
-  .preview-box.empty { color: #aaa; font-style: italic; font-family: system-ui, sans-serif; }
+  .preview-box { display: block; width: 100%; box-sizing: border-box; background: #f4f4f5; border: 1px solid #e4e4e7; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 0.82rem; color: #333; margin-bottom: 14px; min-height: 2.4em; }
+  .preview-box:focus { outline: none; }
+  .preview-box.empty { font-style: italic; font-family: system-ui, sans-serif; }
+  .preview-box.empty::placeholder { color: #aaa; }
   button[type=submit] { padding: 9px 22px; background: #4f46e5; color: #fff; border: none; border-radius: 6px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
   button[type=submit]:hover { background: #4338ca; }
   button[type=submit]:disabled { background: #a5b4fc; cursor: not-allowed; }
@@ -70,38 +72,34 @@
     Use a long, random, secret value. Anyone who knows the seed can impersonate this key.
   </div>
 
-  <!-- Hidden username field so browsers associate the password with this principal. -->
-  <input type="text" autocomplete="username" name="username" value="{{.PrincipalID}}" style="display:none" readonly>
-
-  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
-    <label for="seed" style="margin-bottom:0">Seed phrase</label>
-    <button type="button" id="gen-seed" class="gen-btn">&#x1F3B2; Generate</button>
-  </div>
-  <p class="hint">Enter any secret string, or generate one. The page derives an Ed25519 keypair via SHA-256 of the seed — entirely in your browser.</p>
-  <div class="seed-wrap">
-    <input type="password" id="seed" placeholder="e.g. correct horse battery staple …" autocomplete="current-password" spellcheck="false">
-    <button type="button" class="eyeball" id="toggle-seed" aria-label="Show seed phrase" title="Show seed phrase">
-      <!-- eye icon -->
-      <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-        <circle cx="12" cy="12" r="3"/>
-      </svg>
-      <!-- eye-off icon, hidden by default -->
-      <svg id="eye-off-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-        <line x1="1" y1="1" x2="23" y2="23"/>
-      </svg>
-    </button>
-  </div>
-
-  <label>Generated did:key</label>
-  <!-- Username field: password managers associate autocomplete="username" with the principal identity. -->
-<div class="preview-box empty" id="didkey-preview" autocomplete="username">Enter a seed phrase above to generate a key…</div>
-
   <form method="POST" action="/delegations/self-service" id="scope-form">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <input type="hidden" name="jwt" id="jwt-field">
+
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
+      <label for="seed" style="margin-bottom:0">Seed phrase</label>
+      <button type="button" id="gen-seed" class="gen-btn">&#x1F3B2; Generate</button>
+    </div>
+    <p class="hint">Enter any secret string, or generate one. The page derives an Ed25519 keypair via SHA-256 of the seed — entirely in your browser.</p>
+    <div class="seed-wrap">
+      <input type="password" id="seed" name="password" placeholder="e.g. correct horse battery staple …" autocomplete="current-password" spellcheck="false">
+      <button type="button" class="eyeball" id="toggle-seed" aria-label="Show seed phrase" title="Show seed phrase">
+        <!-- eye icon -->
+        <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+        <!-- eye-off icon, hidden by default -->
+        <svg id="eye-off-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      </button>
+    </div>
+
+    <label for="didkey-username">Generated did:key</label>
+    <input type="text" id="didkey-username" name="username" autocomplete="username" readonly class="preview-box empty" placeholder="Enter a seed phrase above to generate a key…">
 
     <hr class="sep">
     <label for="host_pattern">Host pattern</label>
@@ -210,7 +208,7 @@ function buildAndSignJWT(seed, didKey) {
 
 // ── UI update ─────────────────────────────────────────────────────────────────
 const seedInput    = document.getElementById('seed');
-const previewEl    = document.getElementById('didkey-preview');
+const previewEl    = document.getElementById('didkey-username');
 const jwtField     = document.getElementById('jwt-field');
 const submitBtn    = document.getElementById('submit-btn');
 
@@ -230,7 +228,7 @@ toggleBtn.addEventListener('click', () => {
 async function update() {
   const seedStr = seedInput.value.trim();
   if (!seedStr) {
-    previewEl.textContent = 'Enter a seed phrase above to generate a key…';
+    previewEl.value = '';
     previewEl.classList.add('empty');
     jwtField.value = '';
     submitBtn.disabled = true;
@@ -249,7 +247,7 @@ async function update() {
   // Build and sign the JWT proving key ownership.
   const jwt = buildAndSignJWT(seed, didKey);
 
-  previewEl.textContent = didKey;
+  previewEl.value = didKey;
   previewEl.classList.remove('empty');
   jwtField.value = jwt;
   submitBtn.disabled = false;

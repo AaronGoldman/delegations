@@ -18,6 +18,12 @@
   .scope { display: inline-block; background: #dbeafe; color: #1d4ed8; border-radius: 4px; padding: 2px 8px; margin: 2px; font-size: 0.82rem; font-weight: 500; }
   .revoke button { padding: 8px 18px; border: 1px solid #e4e4e7; border-radius: 7px; background: #f4f4f5; color: #333; cursor: pointer; font-size: 0.9rem; }
   .revoke button:hover { background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }
+  .tab-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; margin-bottom: 18px; }
+  .tab { border: none; padding: 10px 16px; border-radius: 9999px; background: #f4f4f5; color: #333; cursor: pointer; font-size: 0.95rem; }
+  .tab.active { background: #2563eb; color: #fff; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .tab-panel h2 { margin-top: 0; margin-bottom: 10px; font-size: 1.1rem; }
   details { margin-top: 10px; }
   details summary { font-size: 0.8rem; color: #999; cursor: pointer; user-select: none; }
   details pre { background: #f4f4f5; border-radius: 6px; padding: 10px 14px; font-size: 0.78rem; overflow-x: auto; margin: 6px 0 0 0; white-space: pre-wrap; word-break: break-all; }
@@ -25,37 +31,79 @@
 </head>
 <body>
 <h1>Active Grants for {{.PrincipalID}}</h1>
-<p class="subtitle">Grants that agents currently hold on your behalf.</p>
+<p class="subtitle">Grants for the users and groups this agent is authorized for.</p>
 
-{{if not .Grants}}
-<p class="empty">No active grants.</p>
-{{else}}
-{{range .Grants}}
-<div class="grant">
-  <div class="grant-info">
-    <div class="resource">
-      <span class="method">{{join .Methods ", "}}</span><strong>{{.HostPattern}}</strong>{{.PathPattern}}
-    </div>
-    {{if .Scopes}}
-    <div class="scopes">{{range .Scopes}}<span class="scope">{{.}}</span>{{end}}</div>
-    {{end}}
-    <div class="meta">
-      {{.Breadth}} · {{timeRemaining .ExpiresAt}} remaining
-    </div>
-    <details>
-      <summary>raw</summary>
-      <pre>{{toJSON .}}</pre>
-    </details>
-  </div>
-  <div class="revoke">
-    <form method="POST" action="/delegations/revoke">
-      <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-      <input type="hidden" name="delegation_id" value="{{.DelegationID}}">
-      <button type="submit">Revoke</button>
-    </form>
-  </div>
+{{if .AuthorizedGroups}}
+<div class="meta"><strong>Authorized groups:</strong>
+  {{range $i, $g := .AuthorizedGroups}}{{if $i}}, {{end}}<code>{{$g}}</code>{{end}}
 </div>
+{{else}}
+<p class="empty">No authorized user groups yet. <a href="/delegations/claim">Claim a username</a> to join a group.</p>
 {{end}}
+
+<div class="tab-list" role="tablist" aria-label="Grant categories">
+  {{range .Tabs}}
+  <button type="button" class="tab{{if eq .ID $.ActiveTab}} active{{end}}" data-tab="{{.ID}}" aria-selected="{{if eq .ID $.ActiveTab}}true{{else}}false{{end}}">{{.Label}}</button>
+  {{end}}
+</div>
+
+{{range .Tabs}}
+<section class="tab-panel{{if eq .ID $.ActiveTab}} active{{end}}" data-tab-panel="{{.ID}}" id="{{.ID}}">
+  <h2>{{.Label}}</h2>
+  {{if not .Grants}}
+  <p class="empty">No active grants in this category.</p>
+  {{else}}
+  {{range .Grants}}
+  <div class="grant">
+    <div class="grant-info">
+      <div class="resource">
+        <span class="method">{{join .Methods ", "}}</span><strong>{{.HostPattern}}</strong>{{.PathPattern}}
+      </div>
+      {{if .Scopes}}
+      <div class="scopes">{{range .Scopes}}<span class="scope">{{.}}</span>{{end}}</div>
+      {{end}}
+      <div class="meta">
+        {{.Breadth}} · {{timeRemaining .ExpiresAt}} remaining
+      </div>
+      <details>
+        <summary>raw</summary>
+        <pre>{{toJSON .}}</pre>
+      </details>
+    </div>
+    <div class="revoke">
+      <form method="POST" action="/delegations/revoke">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <input type="hidden" name="delegation_id" value="{{.DelegationID}}">
+        <button type="submit">Revoke</button>
+      </form>
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+</section>
 {{end}}
+
+<script>
+  const tabs = document.querySelectorAll('.tab-list button[data-tab]');
+  const panels = document.querySelectorAll('section[data-tab-panel]');
+  const activeClass = 'active';
+
+  function activateTab(id) {
+    if (!id) return;
+    tabs.forEach(button => {
+      const selected = button.dataset.tab === id;
+      button.classList.toggle(activeClass, selected);
+      button.setAttribute('aria-selected', selected);
+    });
+    panels.forEach(panel => {
+      panel.classList.toggle(activeClass, panel.dataset.tabPanel === id);
+    });
+    history.replaceState(null, '', '#' + id);
+  }
+
+  tabs.forEach(button => button.addEventListener('click', () => activateTab(button.dataset.tab)));
+  const start = window.location.hash.slice(1) || '{{.ActiveTab}}';
+  activateTab(start);
+</script>
 </body>
 </html>

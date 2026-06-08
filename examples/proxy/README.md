@@ -137,6 +137,85 @@ Keep `jwt_secret` and `server_secret` private. Rotating `server_secret` invalida
 
 ---
 
+## OAuth Self-Service (GitHub & Google)
+
+### Overview
+
+Enable self-service identity verification by adding OAuth login via GitHub or Google. This allows principals to authenticate themselves without requiring a pre-configured cookie, replacing the permissive scope authorizer with a real identity system.
+
+### Setup
+
+Add OAuth credentials to `config.json`:
+
+```json
+{
+  "listen_addr":   "127.0.0.1:8080",
+  "jwt_secret":    "<256-bit hex>",
+  "server_secret": "<UUIDv4 used as UUIDv5 namespace>",
+  "oauth": {
+    "github": {
+      "client_id":     "YOUR_GITHUB_CLIENT_ID",
+      "client_secret": "YOUR_GITHUB_CLIENT_SECRET",
+      "redirect_uri":  "http://127.0.0.1:8080/auth/github/callback"
+    },
+    "google": {
+      "client_id":     "YOUR_GOOGLE_CLIENT_ID",
+      "client_secret": "YOUR_GOOGLE_CLIENT_SECRET",
+      "redirect_uri":  "http://127.0.0.1:8080/auth/google/callback"
+    }
+  }
+}
+```
+
+### GitHub OAuth Setup
+
+1. Go to [GitHub Settings → Developer settings → OAuth Apps](https://github.com/settings/developers)
+2. Click **New OAuth App**
+3. Fill in:
+   - **Application name**: `Delegation Proxy Server`
+   - **Homepage URL**: `http://127.0.0.1:8080`
+   - **Authorization callback URL**: `http://127.0.0.1:8080/auth/github/callback`
+4. Copy the **Client ID** and **Client Secret** into `config.json`
+
+### Google OAuth Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing one
+3. Enable the **Google+ API**
+4. Go to **Credentials** → **Create Credentials** → **OAuth 2.0 Client IDs**
+5. Choose **Web application**
+6. Add authorized redirect URI: `http://127.0.0.1:8080/auth/google/callback`
+7. Copy the **Client ID** and **Client Secret** into `config.json`
+
+### New Endpoints
+
+| Method | Path                              | Description                          |
+|--------|-----------------------------------|--------------------------------------|
+| GET    | `/auth/github`                    | Initiates GitHub OAuth flow          |
+| GET    | `/auth/github/callback`           | GitHub OAuth callback handler        |
+| GET    | `/auth/google`                    | Initiates Google OAuth flow          |
+| GET    | `/auth/google/callback`           | Google OAuth callback handler        |
+| GET    | `/login`                          | Self-service login page              |
+| POST   | `/logout`                         | Clears principal session             |
+
+### Usage Flow
+
+1. Principal visits `/login` and sees login options (GitHub / Google)
+2. Clicking an option redirects to that provider's login page
+3. After authorization, the provider redirects back to `/auth/{provider}/callback`
+4. Server verifies the OAuth token and sets the `principal_cookie`
+5. Principal is redirected to `/delegate?token=…` (if there was a pending delegation request)
+6. Delegation flow proceeds normally
+
+### Identity Extraction
+
+- **GitHub**: Uses `login` (username) as the stable principal identifier
+- **Google**: Uses `sub` (subject claim) or email as the principal identifier
+
+These are hashed with `server_secret` via UUIDv5 to produce a stable `principal_id`, consistent with the existing cookie-based model.
+
+---
+
 ## ⚠️ SECURITY WARNING
 
 **This is a demonstration server. It is NOT suitable for production.**
@@ -198,3 +277,16 @@ Example:
 This ensures that requests like `/code/anything` will properly match against the delegation grant.
 
 **Status:** Draft - Specification complete, reference implementations in progress
+
+
+#### example otp secret uri:
+`otpauth://totp/ACME%20Co:jdoe@example.com?secret=AUSJD7LZ5H27TAC7NW2IJMATDMVDUPUG&issuer=ACME%20Co&algorithm=SHA1&digits=6&period=30`
+
+* ACME Co: jdoe@example.com
+  * secret=AUSJD7LZ5H27TAC7NW2IJMATDMVDUPUG
+  * issuer=ACME%20Co
+  * algorithm=SHA1
+  * digits=6
+  * period=30
+
+`urn:posix:group:<group_name>`

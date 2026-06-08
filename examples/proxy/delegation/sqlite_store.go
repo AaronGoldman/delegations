@@ -172,6 +172,31 @@ func (s *SQLiteDelegationStore) ListDelegations() ([]Delegation, error) {
 	return out, nil
 }
 
+func (s *SQLiteDelegationStore) FindDelegationsByScope(scope string) ([]Delegation, error) {
+	rows, err := s.db.Query(
+		`SELECT delegation_id, scope, principal_id, breadth, agent_id, session_id,
+		        host_pattern, path_pattern, methods_json, expires_at, issued_at
+		 FROM   delegation_scopes
+		 WHERE  scope = ? AND revoked_at IS NULL
+		 ORDER BY delegation_id, issued_at`,
+		scope,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("FindDelegationsByScope: query: %w", err)
+	}
+	defer rows.Close()
+
+	merged, order, err := scanRowsGrouped(rows)
+	if err != nil {
+		return nil, fmt.Errorf("FindDelegationsByScope: %w", err)
+	}
+	out := make([]Delegation, 0, len(order))
+	for _, id := range order {
+		out = append(out, merged[id])
+	}
+	return out, nil
+}
+
 // FindMatching returns the first active delegation that fully authorizes the
 // request, mirroring InMemoryDelegationStore semantics.
 func (s *SQLiteDelegationStore) FindMatching(agentID, sessionID, host, path, method string, scopes []string) (Delegation, bool, error) {
