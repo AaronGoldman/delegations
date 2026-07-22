@@ -195,9 +195,9 @@ func main() {
 }
 
 // isValidUUID checks if the string is a valid UUID format.
-// Valid format: 8-4-4-4-12 hex digits with hyphens
+// Valid format: ^[0-9a-zA-Z_-]{2,256}$
 func isValidUUID(s string) bool {
-	pattern := `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	pattern := `^[0-9a-zA-Z_-]{2,256}$`
 	re := regexp.MustCompile(pattern)
 	return re.MatchString(s)
 }

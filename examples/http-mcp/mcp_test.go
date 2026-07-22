@@ -10,16 +10,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	testAgentUUID    = "11111111-1111-1111-1111-111111111111"
-	testSessionUUID  = "22222222-2222-2222-2222-222222222222"
-	testHTTPBinPath  = "/tmp/http-test-binary"
+	testAgentUUID   = "11111111-1111-1111-1111-111111111111"
+	testSessionUUID = "22222222-2222-2222-2222-222222222222"
 )
+
+// httpDir is the parent directory of this test file (i.e. the http/ directory).
+var httpDir = func() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..")
+}()
 
 // mcpTestClient wraps an MCP server process for testing
 type mcpTestClient struct {
@@ -88,18 +94,53 @@ func newMCPClient(t *testing.T, tmpDir string) (*mcpTestClient, func()) {
 	return client, cleanup
 }
 
-// waitForInit waits for the MCP server's initialization notification
+// waitForInit sends MCP initialize and waits for the server's initialized notification.
 func (c *mcpTestClient) waitForInit() error {
-	line, err := c.stdout.ReadString('\n')
+	// Send MCP initialize request per the protocol spec.
+	initMsg := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"clientInfo": map[string]any{
+				"name":    "test-client",
+				"version": "0.1.0",
+			},
+		},
+	}
+	data, err := json.Marshal(initMsg)
 	if err != nil {
-		return fmt.Errorf("reading init message: %w", err)
+		return fmt.Errorf("marshaling init: %w", err)
 	}
-	var msg map[string]any
-	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		return fmt.Errorf("parsing init JSON: %w", err)
+	if _, err := c.stdin.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("writing init: %w", err)
 	}
-	if msg["method"] != "notifications/initialized" {
-		return fmt.Errorf("expected 'notifications/initialized', got: %v", msg)
+
+	// Read server's initialize response (id == 1).
+	respLine, err := c.stdout.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reading init response: %w", err)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(respLine), &resp); err != nil {
+		return fmt.Errorf("parsing init response: %w", err)
+	}
+	if id, _ := resp["id"].(float64); id != 1 {
+		return fmt.Errorf("unexpected response id: got %v, want 1", resp["id"])
+	}
+
+	// Read the notifications/initialized message.
+	notifLine, err := c.stdout.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reading notification: %w", err)
+	}
+	var notif map[string]any
+	if err := json.Unmarshal([]byte(notifLine), &notif); err != nil {
+		return fmt.Errorf("parsing notification JSON: %w", err)
+	}
+	if notif["method"] != "notifications/initialized" {
+		return fmt.Errorf("expected 'notifications/initialized', got: %v", notif["method"])
 	}
 	return nil
 }
@@ -139,7 +180,7 @@ func TestMCPInit(t *testing.T) {
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "mcp-server-test")
 
-	if err := buildTestBinary(binPath); err != nil {
+	if err := buildTestBinary(binPath, httpDir); err != nil {
 		t.Fatalf("failed to build test binary: %v", err)
 	}
 
@@ -174,16 +215,17 @@ func TestMCPInit(t *testing.T) {
 
 // TestHTTPSendToolCall validates the http_send tool works correctly
 func TestHTTPSendToolCall(t *testing.T) {
-	// Skip if the actual /tmp/http binary is not available
-	if _, err := os.Stat("/tmp/http"); os.IsNotExist(err) {
-		t.Skipf("/tmp/http binary not found - skipping integration test")
+	// Skip if the actual http proxy binary is not available
+	httpBin, _ := httpBinary()
+	if _, err := os.Stat(httpBin); os.IsNotExist(err) {
+		t.Skipf("http proxy binary not found - skipping integration test")
 		return
 	}
 
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "mcp-server-test")
 
-	if err := buildTestBinary(binPath); err != nil {
+	if err := buildTestBinary(binPath, httpDir); err != nil {
 		t.Fatalf("failed to build test binary: %v", err)
 	}
 
@@ -193,7 +235,7 @@ func TestHTTPSendToolCall(t *testing.T) {
 	httpReq := "GET /get HTTP/1.1\r\nHost: httpbin.org\r\nUser-Agent: mcp-test-client/0.1\r\nConnection: close\r\n\r\n"
 
 	params := map[string]any{
-		"name": "http_send",
+		"name": "http",
 		"arguments": map[string]any{
 			"request": httpReq,
 			"agent":   testAgentUUID,
@@ -240,7 +282,7 @@ func TestToolsCallWithInvalidParams(t *testing.T) {
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "mcp-server-test")
 
-	if err := buildTestBinary(binPath); err != nil {
+	if err := buildTestBinary(binPath, httpDir); err != nil {
 		t.Fatalf("failed to build test binary: %v", err)
 	}
 
@@ -248,7 +290,7 @@ func TestToolsCallWithInvalidParams(t *testing.T) {
 	defer cleanup()
 
 	params := map[string]any{
-		"name": "http_send",
+		"name":      "http",
 		"arguments": map[string]any{
 			// missing 'request'
 		},
@@ -280,7 +322,7 @@ func TestToolsListReturnsDefinition(t *testing.T) {
 	tmpDir := t.TempDir()
 	binPath := filepath.Join(tmpDir, "mcp-server-test")
 
-	if err := buildTestBinary(binPath); err != nil {
+	if err := buildTestBinary(binPath, httpDir); err != nil {
 		t.Fatalf("failed to build test binary: %v", err)
 	}
 
@@ -305,18 +347,34 @@ func TestToolsListReturnsDefinition(t *testing.T) {
 	toolDef := toolsList[0].(map[string]any)
 	name, _ := toolDef["name"].(string)
 
-	if name != "http" {
+	if name != "mcp-http" {
 		t.Errorf("expected tool name 'http', got: %s", name)
 	}
 }
 
-// buildTestBinary compiles the MCP server binary for testing
-func buildTestBinary(outPath string) error {
-	buildCmd := exec.Command("go", "build", "-o", outPath, "mcp-http.go")
+// buildTestBinary compiles the MCP server and copies its companion http binary.
+func buildTestBinary(outPath, httpDir string) error {
+	buildCmd := exec.Command("go", "build", "-o", outPath, "./mcp/")
+	buildCmd.Dir = httpDir
+
 	var stderr bytes.Buffer
 	buildCmd.Stderr = &stderr
+
 	if err := buildCmd.Run(); err != nil {
 		return fmt.Errorf("go build failed: %w\nstderr: %s", err, stderr.String())
 	}
+
+	// Also copy the companion http proxy binary next to the test mcp server
+	srcHTTP := filepath.Join(httpDir, "http")
+	dstHTTP := filepath.Join(filepath.Dir(outPath), "http")
+
+	data, err := os.ReadFile(srcHTTP)
+	if err != nil {
+		return fmt.Errorf("read companion http binary: %w", err)
+	}
+	if err := os.WriteFile(dstHTTP, data, 0755); err != nil {
+		return fmt.Errorf("copy companion http binary: %w", err)
+	}
+
 	return nil
 }

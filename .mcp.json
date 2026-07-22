@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "http": {
+      "type": "stdio",
+      "command": "./bin/mcp-http",
+      "args": [],
+      "env": {}
+    }
+  }
+}

@@ -4,12 +4,12 @@ config.json
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
-http/cookies.sqlite3
 
 # Binaries
-http/http
-delegated-access-token/examples/delegation-proxy-server/delegation-proxy-server
+examples/http/http
+examples/http-mcp/http-mcp
+examples/proxy/proxy
+examples/shs/shs
 
-# http tool
 # macOS
 .DS_Store
