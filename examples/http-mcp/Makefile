@@ -4,4 +4,4 @@ build:
 	go build .
 
 clean:
-	rm -f mcp-http
+	rm -f http-mcp

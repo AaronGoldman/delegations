@@ -2,7 +2,7 @@
   "mcpServers": {
     "http": {
       "type": "stdio",
-      "command": "./bin/mcp-http",
+      "command": "examples/http-mcp/http-mcp",
       "args": [],
       "env": {}
     }

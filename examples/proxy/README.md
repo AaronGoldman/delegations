@@ -106,10 +106,12 @@ GET /api/whoami
 | Method | Path              | Description                              |
 |--------|-------------------|------------------------------------------|
 | GET    | `/api/whoami`     | Protected demo endpoint — returns identity |
-| GET    | `/delegate`       | Grant approval UI (requires `?token=…`)  |
-| POST   | `/grant`          | Processes the approval form              |
-| GET    | `/sessions`       | Lists all active grants                  |
-| POST   | `/revoke`         | Revokes a grant                          |
+| GET    | `/delegations/ask?token=…` | Human-facing grant approval UI |
+| POST   | `/delegations/grant` | Processes the approval form              |
+| GET    | `/delegations/self-service` | Self-service delegation registration and grant |
+| POST   | `/delegations/self-service` | Process self-service key registration |
+| GET    | `/delegations`    | Lists all active grants                  |
+| POST   | `/delegations/revoke` | Revokes a grant                          |
 
 ---
 

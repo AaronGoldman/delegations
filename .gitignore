@@ -13,3 +13,4 @@ examples/shs/shs
 
 # macOS
 .DS_Store
+examples/proxy/delegation-proxy-server

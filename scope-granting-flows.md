@@ -83,7 +83,7 @@ The proxy stores two distinct kinds of record:
 
 | Table | Row means | Created by | Consumed by |
 |---|---|---|---|
-| **Delegation** (grant) | grantee UUIDv5 may access host/path/method with scopes | any entity acting as grantor at `/delegations/ask` | auth middleware on every request |
+| **Delegation** (grant) | grantee UUIDv5 may access host/path/method with scopes | any entity acting as grantor at `/delegations/ask` or `/delegations/self-service` | auth middleware on every request |
 | **will_call** (claims) | if you hold prerequisite, you may delegate claimable | any entity that holds claimable, at `/delegations/scopes/rules` | `/delegations/scopes` POST handler & grant authorization logic |
 
 Grants are runtime access decisions. Will-call rows define both identity claims and scope delegation authority.
@@ -305,6 +305,8 @@ it enriches the forwarded request but is not persisted.
 
 **Self-service vs. will-call:** In self-service (path 2) the entity generates the credential and claims it unilaterally — no prerequisite will_call rule exists, only a self-signed proof. In will-call (path 3) an admin or peer pre-registered a will_call rule; the entity "picks up" the waiting scope by satisfying the prerequisite. Both happen at the same endpoint (`POST /delegations/scopes`) but differ in who initiated the arrangement.
 
+The `/delegations/self-service` endpoint provides the UI and processing for self-service flows, where entities can prove ownership of their DID keys and generate delegation tokens without human approval.
+
 ---
 
 ## will_call
@@ -334,7 +336,7 @@ POST /delegations/scopes
 
 Proxy:
   1. Verify JWT signature → extract did:key
-  2. ScopeStore.AddPrincipalScope(entityID, did:key)    ← scope claimed by self-service
+  2. ScopeStore.AddPrincipalScope(entityID, did:key)    ← scope claimed by self-service (via `/delegations/self-service`)
   3. Check for any will-call rules (see below)
   4. Redirect to /delegations/scopes
 ```
