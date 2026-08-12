@@ -97,6 +97,7 @@ func main() {
 	authMux.Handle("/api/", api.NewMux(pubKey), []string{"profile_view"})
 
 	// Mount /code endpoint for VS Code web socket proxy
+	// This endpoint requires wildcard path pattern (/code/*) to match sub-paths correctly
 	authMux.HandleFunc("/code/", VscodeProxyHandler(pubKey), []string{"code_access"})
 
 	baseURL := "http://" + listenAddr

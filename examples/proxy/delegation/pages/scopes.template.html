@@ -96,7 +96,8 @@
   </div>
 
   <label>Generated did:key</label>
-  <div class="preview-box empty" id="didkey-preview">Enter a seed phrase above to generate a key…</div>
+  <!-- Username field: password managers associate autocomplete="username" with the principal identity. -->
+<div class="preview-box empty" id="didkey-preview" autocomplete="username">Enter a seed phrase above to generate a key…</div>
 
   <form method="POST" action="/delegations/self-service" id="scope-form">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">

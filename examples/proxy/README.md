@@ -185,5 +185,16 @@ Cookies are never stored directly. Each cookie value is hashed with the `server_
 - [RFC7807 - Problem Details for HTTP APIs](https://datatracker.ietf.org/doc/html/rfc7807)
 
 ---
+## Troubleshooting
+
+### Path Pattern Matching Issue
+
+If you're experiencing issues with the `/code` endpoint not loading correctly, make sure that any delegation grants for this endpoint use the wildcard pattern `/code/*` instead of just `/code`. This is because the `/code/` endpoint expects to match all sub-paths under `/code/`.
+
+Example:
+- ✅ Correct: Grant path pattern = `/code/*`
+- ❌ Incorrect: Grant path pattern = `/code`
+
+This ensures that requests like `/code/anything` will properly match against the delegation grant.
 
 **Status:** Draft - Specification complete, reference implementations in progress
