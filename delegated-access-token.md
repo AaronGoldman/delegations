@@ -45,7 +45,7 @@ The protocol leverages a multi-user-agent pattern where an agent receives authen
 
 ### 3.1 Quick Start
 
-1. **Rejected Access:** The agent tries to access a protected web API.
+1. **Rejected Access:** The agent attempts to access a protected web API.
    * The server rejects the request.
    * The server sets an `agent_cookie` and a `session_cookie`.
    * The server returns a `delegation_url` in the error response payload.
@@ -55,7 +55,7 @@ The protocol leverages a multi-user-agent pattern where an agent receives authen
    * The principal actively grants the requested capabilities.
 4. **Notification:** The principal notifies the agent to retry the operation.
 5. **Retry:** The agent retries the API request using its cookie jar.
-   * The server authorizes the request and responds with a successful HTTP code.
+   * The server authorizes the request and responds with a successful HTTP status code.
 
 ### 3.2 Communication Diagram
 
@@ -188,12 +188,12 @@ Any API endpoint (whether public or protected) SHOULD support the following quer
 
 ### 5.2 Short Help (`?h=1`) Specifications
 
-When a request is made to any URL with the `?h=1` parameter, the server MUST return a response containing a structured help metadata object. 
+When a request is made to any URL with the `?h=1` parameter, the server MUST return a response containing structured help metadata. 
 * If the agent is authenticated and possesses the required capabilities, the server returns a `200 OK` along with the capability descriptors.
 * If the agent is unauthorized, the server returns a `401 Unauthorized` with the standard `application/problem+json` payload (per §4) including the structured help fields in the problem object or returning them in a standard format.
 
 The JSON response for `h=1` MUST include the following fields:
-* **`resource`** (string): The path pattern of the resource (e.g. `/api/users/123/messages`).
+* **`resource`** (string): The path pattern of the resource (e.g., `/api/users/123/messages`).
 * **`methods`** (array of strings): The list of HTTP methods supported by the resource.
 * **`scopes`** (array of strings): The list of scopes required to successfully invoke the resource.
 * **`description`** (string): A short, single-sentence summary of the endpoint's functionality.
@@ -214,18 +214,18 @@ Content-Type: application/json
 
 ### 5.3 Long Help (`?help=true`) Specifications
 
-When a request is made to a URL with the `?help=true` parameter, the server SHOULD return a `200 OK` rendering detailed documentation. 
+When a request is made to a URL with the `?help=true` parameter, the server SHOULD return a `200 OK` response with detailed documentation. 
 * By default, it SHOULD return human-friendly HTML or Markdown.
-* If the request includes `Accept: application/json`, the server MAY return an extended JSON schema detailing headers, query parameters, request schemas, and concrete response mockups.
+* If the request includes `Accept: application/json`, the server MAY return an extended JSON schema detailing headers, query parameters, request schemas, and concrete response examples.
 
 ---
 
 ## 6. Security & Delegation Boundaries
 
 ### 6.1 Cookie-Based Authentication Decisions
-The server uses the presence of the `agent_cookie` and `session_cookie` to recognize the requesting agent. When a request matches an active record in the server's database, the server makes an authorization decision to allow access. 
+The server uses the presence of the `agent_cookie` and `session_cookie` to recognize the requesting agent. When a request matches an active record in the server's database, the server makes an authorization decision based on the cookie combination: 
 * If only the `agent_cookie` matches a permanent grant, the request succeeds.
-* If a session-scoped grant is used, both `agent_cookie` and `session_cookie` MUST match.
+* If a session-scoped grant is used, both `agent_cookie` and `session_cookie` MUST match for the request to succeed.
 
 ### 6.2 Browser Interaction & CSRF Rules
 
@@ -239,9 +239,9 @@ The server uses the presence of the `agent_cookie` and `session_cookie` to recog
 
 ### 6.3 Handoff to Different User-Agents
 
-Because AI agents typically run inside a text terminal, headless daemon, or background sandbox, they do not possess standard web browser capabilities (such as interactive HTML rendering or cookies management for identity providers).
+Because AI agents typically run inside a text terminal, headless daemon, or background sandbox, they lack standard web browser capabilities (such as interactive HTML rendering or cookie management for identity providers).
 
-The multi-user-agent delegation pattern cleanly solves this by:
+The multi-user-agent delegation pattern addresses this by:
 * Isolating the agent's identity (`agent_cookie` and `session_cookie` stored in its programmatic HTTP tool).
 * Performing principal authentication and capability approval in a secure, fully-featured browser environment.
 * Merging these capabilities back on the server side using the cookie-derived identifiers, removing any need for the agent to coordinate secrets or redirects.

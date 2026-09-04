@@ -4,8 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/aarongoldman/delegations/http/cookies"
 	"github.com/aarongoldman/delegations/http/proxy"
@@ -64,8 +67,8 @@ EXIT CODES
 `
 
 var (
-	agentFlag   = flag.String("agent", "", "Agent UUID (required)")
-	sessionFlag = flag.String("session", "", "Session UUID (required)")
+	agentFlag   = flag.String("agent", "", "Agent identifier (optional, defaults to calling user name)")
+	sessionFlag = flag.String("session", "", "Session identifier (optional, defaults to calling user name)")
 )
 
 func main() {
@@ -74,19 +77,32 @@ func main() {
 	}
 	flag.Parse()
 
-	// Validate required flags
+	// If agent or session not provided, default to calling user's name
 	if *agentFlag == "" || *sessionFlag == "" {
-		fmt.Fprintf(os.Stderr, "error: both --agent and --session are required\n")
-		fmt.Fprintf(os.Stderr, "Run 'http -h' for usage.\n")
-		os.Exit(1)
+		// Determine effective UID (setuid aware)
+		// Use the real UID of the process, not the effective UID.
+		// This ensures that if the binary is set‑uid, we still identify the
+		// original caller rather than the owner of the executable.
+		uid := os.Getuid()
+		userName, err := user.LookupId(strconv.Itoa(uid))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: failed to lookup calling user name: %v\n", err)
+			os.Exit(1)
+		}
+		if *agentFlag == "" {
+			*agentFlag = userName.Username
+		}
+		if *sessionFlag == "" {
+			*sessionFlag = userName.Username
+		}
 	}
 
-	// Validate UUID format
-	if !isValidUUID(*agentFlag) {
+	// Validate UUID format only if values look like UUIDs (contain hyphens)
+	if strings.Contains(*agentFlag, "-") && !isValidUUID(*agentFlag) {
 		fmt.Fprintf(os.Stderr, "error: invalid agent UUID format\n")
 		os.Exit(1)
 	}
-	if !isValidUUID(*sessionFlag) {
+	if strings.Contains(*sessionFlag, "-") && !isValidUUID(*sessionFlag) {
 		fmt.Fprintf(os.Stderr, "error: invalid session UUID format\n")
 		os.Exit(1)
 	}
