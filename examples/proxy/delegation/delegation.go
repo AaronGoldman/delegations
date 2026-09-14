@@ -196,19 +196,23 @@ func (d Delegation) matches(host, path, method string, requiredScopes []string) 
 //
 // Example implementation: check if the principal's scopes (LDAP groups, OIDC roles, etc.)
 // permit delegation to the requested host/path combination.
-type ScopeAuthorizer interface {
-	// AuthorizeScopes validates whether the principal can delegate the requested scopes.
-	AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error)
-}
+	type ScopeAuthorizer interface {
+		// AuthorizeScopes validates whether the principal can delegate the requested scopes.
+		AuthorizeScopes(principalID string, scopes []string, requestHost string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error)
+	}
 
-// PermissiveScopeAuthorizer is a mock implementation that allows all scope delegations.
-// Use this for demos and testing. In production, implement ScopeAuthorizer to validate
-// against your corporate identity system (LDAP, OIDC, etc.).
-type PermissiveScopeAuthorizer struct{}
+	// LocalOnlyScopeAuthorizer is a demo implementation that only allows delegations when accessed via localhost.
+	type LocalOnlyScopeAuthorizer struct{}
 
-func (p *PermissiveScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
-	// Always authorize — this is a demo implementation only
-	return true, "", nil
+	func (p *LocalOnlyScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, requestHost string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
+		// Check if the actual HTTP request is coming from a local address.
+		if strings.HasPrefix(requestHost, "localhost:") || strings.HasPrefix(requestHost, "127.0.0.1:") || requestHost == "localhost" || requestHost == "127.0.0.1" {
+			return true, "", nil
+		}
+
+		// If the request itself is not from a local address, reject the delegation.
+		return false, "This authorizer only allows delegations when accessed via localhost or 127.0.0.1", nil
+	}
 }
 
 // RestrictedScopeAuthorizer validates that the principal has the required scopes.
@@ -247,7 +251,7 @@ func NewRestrictedScopeAuthorizerWithStore(didKey string, store DelegationStore)
 	}
 }
 
-func (r *RestrictedScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
+func (r *RestrictedScopeAuthorizer) AuthorizeScopes(principalID string, scopes []string, requestHost string, host, path, requestedHostPattern, requestedPathPattern string) (authorized bool, reason string, err error) {
 	// Check if hardcoded did:key is present
 	for _, scope := range scopes {
 		if scope == r.HardcodedDidKey {
@@ -262,6 +266,8 @@ func (r *RestrictedScopeAuthorizer) AuthorizeScopes(principalID string, scopes [
 		}
 	}
 
+	// Check if principal has been granted authority (is an
+...
 	// Check if principal has been granted authority (is an agent in existing delegations)
 	// and can re-grant that delegation
 	if r.delegationStore != nil {

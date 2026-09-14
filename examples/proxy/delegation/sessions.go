@@ -351,7 +351,7 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 	// Validate that the principal is authorized to delegate these scopes.
 	if s.ScopeAuthorizer != nil {
 		authorized, reason, err := s.ScopeAuthorizer.AuthorizeScopes(
-			principalID, claims.Scopes,
+			principalID, claims.Scopes, r.Host,
 			claims.HostPattern, claims.PathPattern,
 			requestedHostPattern, requestedPathPattern,
 		)

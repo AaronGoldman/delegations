@@ -224,7 +224,7 @@ These are hashed with `server_secret` via UUIDv5 to produce a stable `principal_
 
 1. **Permissive Scope Authorizer**: The `PermissiveScopeAuthorizer` allows ANY principal to grant themselves ANY scopes. Anyone can approve their own delegation requests.
 
-2. **Remote Shell Access**: The `/code/*` endpoints proxy to a VS Code server, which provides full remote shell access to the machine.
+2. **Remote Shell Access**: The `/code/` endpoints proxy to a VS Code server, which provides full remote shell access to the machine.
 
 3. **localhost Only**: This server is bound to `127.0.0.1:8080` by default. **Do NOT change this to `0.0.0.0` without replacing `PermissiveScopeAuthorizer` with a real identity/authorization system.**
 
@@ -268,10 +268,10 @@ Cookies are never stored directly. Each cookie value is hashed with the `server_
 
 ### Path Pattern Matching Issue
 
-If you're experiencing issues with the `/code` endpoint not loading correctly, make sure that any delegation grants for this endpoint use the wildcard pattern `/code/*` instead of just `/code`. This is because the `/code/` endpoint expects to match all sub-paths under `/code/`.
+If you're experiencing issues with the `/code` endpoint not loading correctly, make sure that any delegation grants for this endpoint use the subtree pattern `/code/` instead of just `/code`. This is because the `/code/` endpoint expects to match all sub-paths under `/code/`.
 
 Example:
-- ✅ Correct: Grant path pattern = `/code/*`
+- ✅ Correct: Grant path pattern = `/code/`
 - ❌ Incorrect: Grant path pattern = `/code`
 
 This ensures that requests like `/code/anything` will properly match against the delegation grant.

@@ -68,7 +68,7 @@ HR system (holds urn:contoso:user:*)
                   │               └─► grants urn:contoso:user:alice to a CLI agent
                   │
                   └─► grants urn:contoso:group:code_access to her laptop agent
-                          └─► laptop agent accesses /code/*
+                          └─► laptop agent accesses /code/
 ```
 
 Each arrow is a **Delegation** stored in the proxy. The grantor and grantee are both
@@ -97,7 +97,7 @@ CREATE TABLE delegation (
     grantee_id     TEXT        NOT NULL,             -- UUIDv5(id_secret, grantee_cookie)  ["agent" role]
     session_id     TEXT        NOT NULL,             -- UUIDv5(id_secret, session_cookie)
     host_pattern   TEXT        NOT NULL,             -- "api.example.com" or "*.example.com"
-    path_pattern   TEXT        NOT NULL,             -- "/users/*" or exact path
+    path_pattern   TEXT        NOT NULL,             -- "/users/" (subtree) or exact path
     methods        TEXT        NOT NULL,             -- JSON array e.g. '["GET","POST"]'
     scopes         TEXT        NOT NULL,             -- JSON array e.g. '["profile_view"]'
     breadth        TEXT        NOT NULL              -- 'once' | 'session' | 'agent'
@@ -149,9 +149,9 @@ When an entity (acting as grantor) attempts to delegate a scope to an agent (gra
 
 Example:
 ```
-Entity holds:        urn:username:alice (for *.example.com/*)
-Can delegate:        urn:username:alice for (api.example.com/users/*)  [more specific host]
-Cannot delegate:     urn:username:alice for (*.other.com/*)            [different domain]
+Entity holds:        urn:username:alice (for *.example.com/)
+Can delegate:        urn:username:alice for (api.example.com/users/)  [more specific host]
+Cannot delegate:     urn:username:alice for (*.other.com/)            [different domain]
 ```
 
 ### Rule 2: will_call Delegation Authority
@@ -162,14 +162,14 @@ Example will_call row (delegation authority claim):
 ```
 prerequisite:         urn:username:alice
 prerequisite_domain:  *.example.com
-prerequisite_path:    /*
+prerequisite_path:    /
 claimable:            did:key:z6Mk…
 claimable_domain:     *.example.com
-claimable_path:       /*
+claimable_path:       /
 breadth:              permanent
 ```
 
-**Meaning:** "Anyone holding `urn:username:alice` (at *.example.com/*) can grant `did:key:z6Mk…` (at *.example.com/*) to another agent."
+**Meaning:** "Anyone holding `urn:username:alice` (at *.example.com/) can grant `did:key:z6Mk…` (at *.example.com/) to another agent."
 
 **Validation logic:**
 
@@ -517,7 +517,7 @@ Used when alice has no authenticated devices and has lost her seed.
 
 ## Flow 4 — Group Membership Grant
 
-**Goal:** Bob (holds `urn:contoso:group:code_access`) grants alice membership so her agent can access `/code/*`.
+**Goal:** Bob (holds `urn:contoso:group:code_access`) grants alice membership so her agent can access `/code/`.
 
 Bob acts as grantor. He visits `/delegations/ask` with a delegation request token that alice's agent generated. Bob approves it. The proxy stores a delegation row:
 
@@ -526,7 +526,7 @@ grantor_id:  UUIDv5(bob's cookie)
 grantee_id:  UUIDv5(alice's agent cookie)
 scopes:      ["urn:contoso:group:code_access"]
 host_pattern: "proxy.contoso.com"
-path_pattern: "/code/*"
+path_pattern: "/code/"
 methods:      ["GET"]
 breadth:      "agent"
 ```

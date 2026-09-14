@@ -24,15 +24,16 @@ When making requests to external hosts (non-127.x.x.x or non-::1 addresses):
 Certain endpoints require specific path patterns:
 
 #### `/code/` Endpoint
-- **Required Pattern**: `/code/*`
+- **Required Pattern**: `/code/`
 - **Reason**: This endpoint proxies requests to a VS Code server and needs to match all sub-paths under `/code/`
 - **Example**: 
-  - ✅ Correct: Grant path pattern = `/code/*`
+  - ✅ Correct: Grant path pattern = `/code/`
   - ❌ Incorrect: Grant path pattern = `/code`
 
 ### General Path Pattern Rules
 - Path patterns must be explicitly defined when granting access
-- Wildcards (`/*`) are required for sub-path matching
+- A trailing `/` grants the subtree: `/code/` covers `/code` and every sub-path past the `/`
+- A path without a trailing `/` matches exactly and nothing more
 - The system validates that requested paths match the granted patterns
 
 ## Scope Authorization Flow

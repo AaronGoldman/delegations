@@ -3,10 +3,12 @@ package main
 import (
 	"crypto/ed25519"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"sync"
 
 	"github.com/aarongoldman/delegations/examples/delegation-proxy-server/delegation"
 )
@@ -96,37 +98,22 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bidirectionally pipe data between client and VS Code socket
+	// Bidirectionally pipe data between client and VS Code socket using io.Copy
+	// Use sync.WaitGroup from standard library
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
-		_, err := copyData(clientConn, conn)
-		if err != nil {
-			log.Printf("ERROR copying data from Unix socket to client: %v", err)
-		}
+		defer wg.Done()
+		_, _ = io.Copy(clientConn, conn)
 	}()
 
-	_, err = copyData(conn, clientConn)
-	if err != nil {
-		log.Printf("ERROR copying data from client to Unix socket: %v", err)
-	}
-}
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(conn, clientConn)
+	}()
 
-// copyData performs a bidirectional copy of data between two connections.
-func copyData(dst net.Conn, src net.Conn) (int64, error) {
-	buf := make([]byte, 32*1024)
-	var total int64
-
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, err := dst.Write(buf[:n]); err != nil {
-				return total + int64(n), err
-			}
-			total += int64(n)
-		}
-		if err != nil {
-			return total, err
-		}
-	}
+	wg.Wait()
 }
 
 // writeVscodeUnavailableError returns a helpful 502 error when VS Code server is unavailable.
