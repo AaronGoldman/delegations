@@ -21,14 +21,13 @@ type Delegation struct {
 	Breadth      string `json:"breadth,omitempty"` // "once" | "session" | "agent"
 
 	// JWT claims (spec §5.1).
-	AgentID     string   `json:"agent_id"`
-	SessionID   string   `json:"session_id"`
-	HostPattern string   `json:"host"` // "api.example.com" or "*.example.com"
-	PathPattern string   `json:"path"` // "/users/123/messages" or "/users/*"
-	Methods     []string `json:"methods"`
-	Scopes      []string `json:"scopes"`
-	ExpiresAt   string   `json:"expires_at,omitempty"` // ISO 8601 / RFC 3339
-	IssuedAt    int64    `json:"iat,omitempty"`
+	AgentID   string   `json:"agent_id"`
+	SessionID string   `json:"session_id"`
+	Pattern   string   `json:"pattern"` // ".example.com/path/to/example/"
+	Methods   []string `json:"methods"`
+	Scopes    []string `json:"scopes"`
+	ExpiresAt string   `json:"expires_at,omitempty"` // ISO 8601 / RFC 3339
+	IssuedAt  int64    `json:"iat,omitempty"`
 }
 
 // jwtHeader is the base64url-encoded JWT header {"alg":"HS256","typ":"JWT"}.
@@ -163,7 +162,8 @@ func DelegationFromSignedJWT(pubKey ed25519.PublicKey, token string) (*Delegatio
 
 // matches checks all four conditions from spec §6.2.
 func (d Delegation) matches(host, path, method string, requiredScopes []string) bool {
-	if !matchPattern(d.HostPattern, host) || !matchPattern(d.PathPattern, path) {
+	patternHost, patternPath := splitPattern(d.Pattern)
+	if !matchPattern(patternHost, host) || !matchPattern(patternPath, path) {
 		return false
 	}
 	if !slices.ContainsFunc(d.Methods, func(m string) bool { return strings.EqualFold(m, method) }) {
@@ -175,6 +175,42 @@ func (d Delegation) matches(host, path, method string, requiredScopes []string) 
 		}
 	}
 	return true
+}
+
+// splitPattern separates the host and path components of a delegation pattern.
+// The first slash is the separator; paths may contain any later slashes.
+func splitPattern(pattern string) (host, path string) {
+	if i := strings.IndexByte(pattern, '/'); i >= 0 {
+		return pattern[:i], pattern[i:]
+	}
+	return pattern, "/"
+}
+
+// joinPattern creates the canonical combined host/path representation.
+func joinPattern(host, path string) string {
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return host + path
+}
+
+// normalizePattern converts legacy wildcard spellings to the canonical form
+// used in JWTs, the approval UI, and persisted grants.
+func normalizePattern(pattern string) string {
+	host, path := splitPattern(pattern)
+	if strings.HasPrefix(host, "*.") {
+		host = "." + strings.TrimPrefix(host, "*.")
+	}
+	if strings.HasSuffix(path, "/*") {
+		path = strings.TrimSuffix(path, "/*") + "/"
+		if path == "//" {
+			path = "/"
+		}
+	}
+	return joinPattern(host, path)
 }
 
 // ScopeAuthorizer validates whether a delegator (principal) is authorized to delegate specific scopes.
@@ -312,9 +348,8 @@ func matchPattern(pattern, value string) bool {
 	if pattern == "*" {
 		return true
 	}
-
-	if !strings.Contains(pattern, "*") {
-		return pattern == value
+	if strings.HasPrefix(pattern, ".") {
+		return strings.HasSuffix(value, pattern) && len(value) > len(pattern)
 	}
 
 	// Host wildcard: "*.example.com"
@@ -329,6 +364,16 @@ func matchPattern(pattern, value string) bool {
 		prefix := pattern[:len(pattern)-2] // strip "/*"
 		// Allow "/prefix", "/prefix/" or "/prefix/anything" (multi-segment paths)
 		return value == prefix || strings.HasPrefix(value, prefix+"/")
+	}
+
+	// A trailing slash is the normalized path-prefix wildcard.
+	if strings.HasSuffix(pattern, "/") {
+		prefix := strings.TrimSuffix(pattern, "/")
+		return value == prefix || strings.HasPrefix(value, pattern)
+	}
+
+	if !strings.Contains(pattern, "*") {
+		return pattern == value
 	}
 
 	// Any other wildcard placement is unsupported → no match.

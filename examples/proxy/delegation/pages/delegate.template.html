@@ -32,7 +32,7 @@
 <p class="subtitle">An agent is requesting access to a protected resource on your behalf.</p>
 
 <div class="resource">
-  <span class="method">{{join .Methods ", "}}</span><strong>{{.HostPattern}}</strong>{{.PathPattern}}
+  <span class="method">{{join .Methods ", "}}</span><strong>{{.Pattern}}</strong>
 </div>
 
 <p class="subtitle" style="font-size:0.85rem;color:#888;">Approving as principal <code>{{.PrincipalID}}</code></p>
@@ -48,25 +48,13 @@
   <input type="hidden" name="token"      value="{{.Token}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
-  {{if gt (len .HostOptions) 1}}
+  {{if gt (len .PatternOptions) 1}}
   <fieldset>
-    <legend>Host scope</legend>
-    {{range $i, $h := .HostOptions}}
+    <legend>URL pattern</legend>
+    {{range $i, $pattern := .PatternOptions}}
     <label>
-      <input type="radio" name="host_pattern" value="{{$h}}"{{if eq $i 0}} checked{{end}}>
-      <span class="scope-option">{{$h}}</span>
-    </label>
-    {{end}}
-  </fieldset>
-  {{end}}
-
-  {{if gt (len .PathOptions) 1}}
-  <fieldset>
-    <legend>Path scope</legend>
-    {{range $i, $p := .PathOptions}}
-    <label>
-      <input type="radio" name="path_pattern" value="{{$p}}"{{if eq $i 0}} checked{{end}}>
-      <span class="scope-option">{{$p}}</span>
+      <input type="radio" name="pattern" value="{{$pattern}}"{{if eq $i 0}} checked{{end}}>
+      <span class="scope-option">{{$pattern}}</span>
     </label>
     {{end}}
   </fieldset>

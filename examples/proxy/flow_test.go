@@ -452,8 +452,7 @@ func TestExpiredToken(t *testing.T) {
 	d := &delegation.Delegation{
 		AgentID:     "test-agent",
 		SessionID:   "test-session",
-		HostPattern: "example.com",
-		PathPattern: "/api/*",
+		Pattern:     "example.com/api/*",
 		Methods:     []string{"GET"},
 		Scopes:      []string{"test_scope"},
 		ExpiresAt:   time.Now().Add(-1 * time.Second).Format(time.RFC3339), // expired
@@ -493,8 +492,7 @@ func TestBreadthSemantics(t *testing.T) {
 				DelegationID: "test-" + tt.breadth,
 				AgentID:      "agent",
 				SessionID:    "session",
-				HostPattern:  "example.com",
-				PathPattern:  "/",
+				Pattern:      "example.com/",
 				Methods:      []string{"GET"},
 				Scopes:       []string{"scope"},
 				Breadth:      tt.breadth,

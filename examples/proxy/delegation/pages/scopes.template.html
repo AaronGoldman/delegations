@@ -102,13 +102,9 @@
     <input type="text" id="didkey-username" name="username" autocomplete="username" readonly class="preview-box empty" placeholder="Enter a seed phrase above to generate a key…">
 
     <hr class="sep">
-    <label for="host_pattern">Host pattern</label>
-    <p class="hint">Examples: <code>localhost:8080</code>, <code>*.example.com</code></p>
-    <input type="text" id="host_pattern" name="host_pattern" placeholder="localhost:8080/delegations/ask" class="grant-input" required>
-
-    <label for="path_pattern">Path pattern</label>
-    <p class="hint">Examples: <code>/api/*</code>, <code>/*</code></p>
-    <input type="text" id="path_pattern" name="path_pattern" placeholder="/*" value="/*" class="grant-input" required>
+    <label for="pattern">Delegation pattern</label>
+    <p class="hint">Examples: <code>localhost:8080/</code>, <code>.example.com/api/*</code></p>
+    <input type="text" id="pattern" name="pattern" placeholder="localhost:8080/" class="grant-input" required>
 
     <label>Methods</label>
     <div class="method-row">

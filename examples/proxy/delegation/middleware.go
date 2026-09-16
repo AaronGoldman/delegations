@@ -285,14 +285,13 @@ func setSessionCookie(w http.ResponseWriter, val string) {
 // the grant UI can display them.
 func (m *AuthMiddlewareMux) writeDelegationError(w http.ResponseWriter, r *http.Request, agentID, sessionID string, scopes []string) {
 	token, err := (Delegation{
-		AgentID:     agentID,
-		SessionID:   sessionID,
-		HostPattern: r.Host,
-		PathPattern: r.URL.Path,
-		Methods:     []string{r.Method},
-		Scopes:      scopes,
-		ExpiresAt:   time.Now().Add(m.tokenTTL).UTC().Format(time.RFC3339),
-		IssuedAt:    time.Now().Unix(),
+		AgentID:   agentID,
+		SessionID: sessionID,
+		Pattern:   joinPattern(r.Host, r.URL.Path),
+		Methods:   []string{r.Method},
+		Scopes:    scopes,
+		ExpiresAt: time.Now().Add(m.tokenTTL).UTC().Format(time.RFC3339),
+		IssuedAt:  time.Now().Unix(),
 	}).JWT(m.delegationURLSecret)
 	if err != nil {
 		log.Printf("ERROR JWT: %v", err)

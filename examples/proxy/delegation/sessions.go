@@ -83,10 +83,9 @@ var grantedPage []byte
 // needed by the approval form: the raw JWT token and the CSRF token.
 type delegatePageData struct {
 	Delegation
-	Token       string
-	CSRFToken   string
-	HostOptions []string // ordered from narrowest to broadest
-	PathOptions []string // ordered from narrowest to broadest
+	Token          string
+	CSRFToken      string
+	PatternOptions []string // ordered from narrowest to broadest
 }
 
 // hostExpansionOptions returns progressively broader wildcard host patterns,
@@ -120,15 +119,15 @@ func hostExpansionOptions(host string) []string {
 	return options
 }
 
-// pathExpansionOptions returns progressively broader wildcard path patterns,
-// ordered from narrowest (exact) to broadest (/*).
-// Example: "/a/b/c" → ["/a/b/c", "/a/b/*", "/a/*", "/*"]
+// pathExpansionOptions returns progressively broader path patterns, using a
+// trailing slash for path-prefix wildcards.
+// Example: "/a/b/c" → ["/a/b/c", "/a/b/", "/a/", "/"]
 func pathExpansionOptions(path string) []string {
 	if path == "" {
 		return nil
 	}
 
-	// Normalize: remove trailing "/" and "/*", handle root case
+	// Normalize legacy path/* syntax to path/.
 	norm := strings.TrimSuffix(path, "/*")
 	norm = strings.TrimSuffix(norm, "/")
 	if norm == "" {
@@ -145,31 +144,48 @@ func pathExpansionOptions(path string) []string {
 		}
 	}
 
-	options := []string{path}
-	seen := map[string]bool{path: true}
-
-	// If path doesn't already end with /*, add that as an option
-	if !strings.HasSuffix(path, "/*") && norm != "/" {
-		pathWithWildcard := norm + "/*"
-		if !seen[pathWithWildcard] {
-			options = append(options, pathWithWildcard)
-			seen[pathWithWildcard] = true
+	initial := path
+	if strings.HasSuffix(path, "/*") {
+		initial = norm + "/"
+		if norm == "/" {
+			initial = "/"
 		}
 	}
+	options := []string{initial}
+	seen := map[string]bool{initial: true}
 
-	// Generate wider wildcard patterns by replacing trailing segments with "/*"
-	for i := len(segments) - 1; i >= 0; i-- {
-		prefix := "/" + strings.Join(segments[:i], "/")
-		w := prefix + "/*"
-		if prefix == "/" {
-			w = "/*"
-		}
-		if !seen[w] {
-			options = append(options, w)
-			seen[w] = true
+	// Generate wider prefix patterns by removing trailing path segments.
+	for i := len(segments) - 1; i >= 1; i-- {
+		prefix := "/" + strings.Join(segments[:i], "/") + "/"
+		if !seen[prefix] {
+			options = append(options, prefix)
+			seen[prefix] = true
 		}
 	}
+	if !seen["/"] {
+		options = append(options, "/")
+	}
 
+	return options
+}
+
+// patternExpansionOptions returns combined host/path patterns ordered from
+// narrowest to broadest, preserving each dimension's existing expansion order.
+func patternExpansionOptions(pattern string) []string {
+	host, path := splitPattern(pattern)
+	hostOptions := hostExpansionOptions(host)
+	pathOptions := pathExpansionOptions(path)
+	options := make([]string, 0, len(hostOptions)*len(pathOptions))
+	seen := make(map[string]bool)
+	for _, hostOption := range hostOptions {
+		for _, pathOption := range pathOptions {
+			option := joinPattern(hostOption, pathOption)
+			if !seen[option] {
+				options = append(options, option)
+				seen[option] = true
+			}
+		}
+	}
 	return options
 }
 
@@ -190,6 +206,7 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired delegation token: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	claims.Pattern = normalizePattern(claims.Pattern)
 
 	// Use agent_cookie to identify the principal (human approving the grant).
 	// The agent_cookie is set by the middleware and persists across sessions.
@@ -234,11 +251,10 @@ func (s *SessionsServer) showGrantUI(w http.ResponseWriter, r *http.Request) {
 	d := *claims
 	d.PrincipalID = principalID
 	data := delegatePageData{
-		Delegation:  d,
-		Token:       token,
-		CSRFToken:   csrfToken,
-		HostOptions: hostExpansionOptions(d.HostPattern),
-		PathOptions: pathExpansionOptions(d.PathPattern),
+		Delegation:     d,
+		Token:          token,
+		CSRFToken:      csrfToken,
+		PatternOptions: patternExpansionOptions(d.Pattern),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := delegateTemplate.Execute(w, data); err != nil {
@@ -314,45 +330,30 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine the requested host and path patterns (original if not overridden)
-	requestedHostPattern := claims.HostPattern
-	requestedPathPattern := claims.PathPattern
-
-	// Apply user-selected wildcard overrides (broader than what the JWT requested).
-	if hp := r.FormValue("host_pattern"); hp != "" {
+	// Determine the requested host and path pattern (original if not overridden).
+	requestedPattern := normalizePattern(claims.Pattern)
+	if submittedPattern := strings.TrimSpace(r.FormValue("pattern")); submittedPattern != "" {
 		valid := false
-		for _, o := range hostExpansionOptions(claims.HostPattern) {
-			if o == hp {
+		for _, option := range patternExpansionOptions(claims.Pattern) {
+			if option == submittedPattern {
 				valid = true
 				break
 			}
 		}
 		if !valid {
-			http.Error(w, "invalid host_pattern", http.StatusBadRequest)
+			http.Error(w, "invalid pattern", http.StatusBadRequest)
 			return
 		}
-		requestedHostPattern = hp
+		requestedPattern = submittedPattern
 	}
-	if pp := r.FormValue("path_pattern"); pp != "" {
-		valid := false
-		for _, o := range pathExpansionOptions(claims.PathPattern) {
-			if o == pp {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			http.Error(w, "invalid path_pattern", http.StatusBadRequest)
-			return
-		}
-		requestedPathPattern = pp
-	}
+	requestedHostPattern, requestedPathPattern := splitPattern(requestedPattern)
+	originalHostPattern, originalPathPattern := requestedHostPattern, requestedPathPattern
 
 	// Validate that the principal is authorized to delegate these scopes.
 	if s.ScopeAuthorizer != nil {
 		authorized, reason, err := s.ScopeAuthorizer.AuthorizeScopes(
 			principalID, claims.Scopes, r.Host,
-			claims.HostPattern, claims.PathPattern,
+			originalHostPattern, originalPathPattern,
 			requestedHostPattern, requestedPathPattern,
 		)
 		if err != nil {
@@ -362,15 +363,14 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		}
 		if !authorized {
 			log.Printf("DENIED principal=%s host=%s path=%s requested_host=%s requested_path=%s: %s",
-				principalID, claims.HostPattern, claims.PathPattern, requestedHostPattern, requestedPathPattern, reason)
+				principalID, originalHostPattern, originalPathPattern, requestedHostPattern, requestedPathPattern, reason)
 			http.Error(w, "not authorized: "+reason, http.StatusForbidden)
 			return
 		}
 	}
 
 	// Apply the validated patterns to the delegation
-	claims.HostPattern = requestedHostPattern
-	claims.PathPattern = requestedPathPattern
+	claims.Pattern = joinPattern(requestedHostPattern, requestedPathPattern)
 
 	claims.DelegationID = NewUUIDv4()
 	claims.PrincipalID = principalID
@@ -382,9 +382,9 @@ func (s *SessionsServer) processGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("GRANT agent=%s session=%s %s %s%s breadth=%s delegation=%s",
+	log.Printf("GRANT agent=%s session=%s %s %s breadth=%s delegation=%s",
 		claims.AgentID, claims.SessionID,
-		strings.Join(claims.Methods, ","), claims.HostPattern, claims.PathPattern,
+		strings.Join(claims.Methods, ","), claims.Pattern,
 		claims.Breadth, claims.DelegationID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -494,8 +494,7 @@ func (s *SessionsServer) processClaim(w http.ResponseWriter, r *http.Request) {
 		PrincipalID:  principalID,
 		AgentID:      agentID,
 		SessionID:    sessionID,
-		HostPattern:  s.ClaimHost,
-		PathPattern:  s.ClaimPath,
+		Pattern:      joinPattern(s.ClaimHost, s.ClaimPath),
 		Methods:      []string{"GET", "POST"},
 		Scopes:       []string{scope},
 		Breadth:      "agent",
@@ -550,7 +549,7 @@ func groupClaimScopes(delegations []Delegation, agentID, claimHost, claimPath st
 		if d.AgentID != agentID {
 			continue
 		}
-		if d.HostPattern != claimHost || d.PathPattern != claimPath {
+		if d.Pattern != joinPattern(claimHost, claimPath) {
 			continue
 		}
 		for _, scope := range d.Scopes {
@@ -644,7 +643,7 @@ func (s *SessionsServer) listGrants(w http.ResponseWriter, r *http.Request) {
 			tabs[3].Grants = append(tabs[3].Grants, d)
 		}
 		for _, scope := range authorizedGroups {
-			if d.HostPattern != s.ClaimHost || d.PathPattern != s.ClaimPath {
+			if d.Pattern != joinPattern(s.ClaimHost, s.ClaimPath) {
 				continue
 			}
 			if hasScope(d.Scopes, scope) {
@@ -916,13 +915,13 @@ func (s *SessionsServer) processSelfService(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Validate grant fields.
-	hostPattern := strings.TrimSpace(r.FormValue("host_pattern"))
-	pathPattern := strings.TrimSpace(r.FormValue("path_pattern"))
+	pattern := strings.TrimSpace(r.FormValue("pattern"))
+	hostPattern, pathPattern := splitPattern(pattern)
 	methods := r.Form["methods"]
 	breadth := r.FormValue("breadth")
 	ttl := r.FormValue("ttl")
-	if hostPattern == "" || pathPattern == "" {
-		http.Error(w, "host_pattern and path_pattern are required", http.StatusBadRequest)
+	if hostPattern == "" || pathPattern == "/" && pattern == "" {
+		http.Error(w, "pattern is required", http.StatusBadRequest)
 		return
 	}
 	if len(methods) == 0 {
@@ -967,8 +966,7 @@ func (s *SessionsServer) processSelfService(w http.ResponseWriter, r *http.Reque
 		PrincipalID:  principalID,
 		AgentID:      agentID,
 		SessionID:    sessionID,
-		HostPattern:  hostPattern,
-		PathPattern:  pathPattern,
+		Pattern:      joinPattern(hostPattern, pathPattern),
 		Methods:      methods,
 		Scopes:       []string{didKey},
 		Breadth:      breadth,
@@ -980,9 +978,9 @@ func (s *SessionsServer) processSelfService(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("SELF-SERVICE principal=%s agent=%s did:key=%s %s %s%s breadth=%s delegation=%s",
+	log.Printf("SELF-SERVICE principal=%s agent=%s did:key=%s %s %s breadth=%s delegation=%s",
 		principalID, agentID, didKey,
-		strings.Join(methods, ","), hostPattern, pathPattern,
+		strings.Join(methods, ","), joinPattern(hostPattern, pathPattern),
 		breadth, d.DelegationID)
 	http.Redirect(w, r, "/delegations/self-service", http.StatusSeeOther)
 }
