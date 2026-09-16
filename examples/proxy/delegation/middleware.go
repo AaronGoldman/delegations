@@ -41,7 +41,7 @@ func Mux() (*AuthMiddlewareMux, ed25519.PublicKey, error) {
 		// Combined with the VS Code proxy (which opens a remote shell), this is
 		// equivalent to exposing unrestricted shell access to the network.
 		// Replace with corporate identity system and real scope authorization before production.
-		ScopeAuthorizer: &PermissiveScopeAuthorizer{},
+		ScopeAuthorizer: &LocalOnlyScopeAuthorizer{},
 	}
 
 	authMux := NewAuthMiddlewareMux(
