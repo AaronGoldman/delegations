@@ -1,6 +1,6 @@
 # HTTP Client Setup
 
-The `http` binary is an SHS client that communicates with the delegation proxy and SHS daemon. For security, it should run as a dedicated unprivileged user.
+The `http` binary is an ambient-authentication client that communicates with the delegation proxy and VS Code web server. For security, it should run as a dedicated unprivileged user.
 
 ## Setup Instructions
 

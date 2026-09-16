@@ -9,7 +9,6 @@ config.json
 examples/http/http
 examples/http-mcp/http-mcp
 examples/proxy/proxy
-examples/shs/shs
 
 # macOS
 .DS_Store
