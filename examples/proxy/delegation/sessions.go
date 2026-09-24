@@ -31,7 +31,7 @@ type SessionsServer struct {
 	Store                  DelegationStore
 	ScopeAuthorizer        ScopeAuthorizer // validates principal authorization for requested scopes
 	ClaimHost              string          // host pattern for group-claim delegations (default "127.0.0.1")
-	ClaimPath              string          // path pattern for group-claim delegations (default "/delegations/*")
+	ClaimPath              string          // path pattern for group-claim delegations (default "/delegations/")
 }
 
 var tmplFuncs = template.FuncMap{
@@ -90,11 +90,12 @@ type delegatePageData struct {
 
 // hostExpansionOptions returns progressively broader wildcard host patterns,
 // ordered from narrowest (exact) to broadest (widest wildcard).
+// The canonical wildcard is a dot-prefix (e.g. ".example.com").
 // Examples:
 //
-//	"staging.localhost:8080"     → ["staging.localhost:8080", "*.localhost:8080"]
-//	"sub.example.com"           → ["sub.example.com", "*.example.com"]
-//	"a.b.example.com"           → ["a.b.example.com", "*.b.example.com", "*.example.com"]
+//	"staging.localhost:8080" → ["staging.localhost:8080", ".localhost:8080"]
+//	"sub.example.com"        → ["sub.example.com", ".example.com"]
+//	"a.b.example.com"        → ["a.b.example.com", ".b.example.com", ".example.com"]
 func hostExpansionOptions(host string) []string {
 	hostname, port, hasPort := strings.Cut(host, ":")
 	portSuffix := ""
@@ -102,16 +103,19 @@ func hostExpansionOptions(host string) []string {
 		portSuffix = ":" + port
 	}
 
+	// A concrete host never starts with a wildcard prefix; strip one (legacy "*." or
+	// canonical ".") defensively so expanding an already-wildcard host still works.
 	base := strings.TrimPrefix(hostname, "*.")
+	base = strings.TrimPrefix(base, ".")
 	labels := strings.Split(base, ".")
 	options := []string{host}
 
-	// Generate wildcard variants (skip bare TLD for 3+ labels)
+	// Generate canonical dot-prefix wildcard variants (skip bare TLD for 3+ labels)
 	for i := 1; i < len(labels); i++ {
 		if i == len(labels)-1 && len(labels) > 2 {
 			break
 		}
-		w := "*." + strings.Join(labels[i:], ".") + portSuffix
+		w := "." + strings.Join(labels[i:], ".") + portSuffix
 		if w != host {
 			options = append(options, w)
 		}

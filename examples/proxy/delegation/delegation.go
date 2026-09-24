@@ -222,12 +222,12 @@ func normalizePattern(pattern string) string {
 //   - scopes: principal URNs from the JWT (e.g., ["urn:contoso:corpuser:aagoldma", "urn:contoso:groupPrincipal(ALL-ENGINEERS)"])
 //   - host: the hostname the delegator is requesting access to (from the request context)
 //   - path: the path the delegator is requesting access to (from the request context)
-//   - requestedHostPattern: the host pattern the delegator selected (e.g., "*.example.com")
-//   - requestedPathPattern: the path pattern the delegator selected (e.g., "/api/*")
+//   - requestedHostPattern: the host pattern the delegator selected (e.g., ".example.com")
+//   - requestedPathPattern: the path pattern the delegator selected (e.g., "/api/")
 //
 // It must return:
 //   - authorized: true if the delegator is permitted to delegate these scopes, false otherwise
-//   - reason: if not authorized, a user-friendly message explaining why (e.g., "You can only delegate to /api/*, not /admin/*")
+//   - reason: if not authorized, a user-friendly message explaining why (e.g., "You can only delegate to /api/, not /admin/")
 //   - error: non-nil if authorization cannot be determined
 //
 // Example implementation: check if the principal's scopes (LDAP groups, OIDC roles, etc.)
@@ -336,13 +336,13 @@ type DelegationStore interface {
 // Host patterns (spec §6.3):
 //
 //	"api.example.com"  exact match only
-//	"*.example.com"    matches any subdomain (api.example.com, cdn.example.com, …)
+//	".example.com"     matches any subdomain (api.example.com, cdn.example.com, …)
 //
 // Path patterns (spec §6.3):
 //
 //	"/users/123/messages"  exact match only
-//	"/users/123/*"         matches /users/123/messages, /users/123/profile, …
-//	"/users/*"             matches /users/123/messages, /users/456/posts, …
+//	"/users/123/"          matches /users/123 and everything under /users/123/
+//	"/users/"              matches /users and everything under /users/
 func matchPattern(pattern, value string) bool {
 	// Catch-all wildcard
 	if pattern == "*" {

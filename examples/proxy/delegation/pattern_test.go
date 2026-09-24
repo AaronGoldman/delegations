@@ -32,7 +32,7 @@ func TestJoinPattern(t *testing.T) {
 
 func TestDelegationMatchesCombinedPattern(t *testing.T) {
 	d := Delegation{
-		Pattern: ".example.com/path/to/*",
+		Pattern: ".example.com/path/to/",
 		Methods: []string{"GET"},
 		Scopes:  []string{"read"},
 	}

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -85,7 +86,19 @@ func main() {
 	}
 	flag.Parse()
 
-	const listenAddr = "127.0.0.1:8080"
+	const (
+		httpAddr  = "0.0.0.0:8080"
+		httpsAddr = "0.0.0.0:8443"
+	)
+	certFile := "certs/tls.crt"
+	keyFile := "certs/tls.key"
+
+	// Auto-generate a self-signed cert (localhost, spark-a5d9.local, and this
+	// host's LAN IPs) if none is on disk yet. The delegation UI relies on
+	// Secure cookies, which only work over the https:// listener.
+	if err := ensureSelfSignedCert(certFile, keyFile); err != nil {
+		log.Fatalf("tls: %v", err)
+	}
 
 	// Wrap mux with delegation infrastructure
 	authMux, pubKey, err := delegation.Mux()
@@ -100,10 +113,12 @@ func main() {
 	// This endpoint requires wildcard path pattern (/code/*) to match sub-paths correctly
 	authMux.HandleFunc("/code/", VscodeProxyHandler(pubKey), []string{"code_access"})
 
-	baseURL := "http://" + listenAddr
-	port := listenAddr[strings.LastIndex(listenAddr, ":"):]
+	baseURL := "http://" + httpAddr
+	httpsBase := "https://" + httpsAddr
+	port := httpAddr[strings.LastIndex(httpAddr, ":"):]
 	stagingURL := "http://staging.localhost" + port
-	log.Printf("delegation-proxy-server listening on %s", baseURL)
+	log.Printf("delegation-proxy-server listening on %s and %s", baseURL, httpsBase)
+	log.Printf("  Use the https:// URL in a browser — the delegation UI sets Secure cookies.")
 	log.Printf("")
 	log.Printf("  Agents authenticate with:  Authorization: Bearer <delegation-token>")
 	log.Printf("  Agent-id and session-id are encoded in the token — no extra headers needed.")
@@ -119,14 +134,31 @@ func main() {
 	log.Printf("")
 	log.Printf("  Run with -h for full usage and cookie security model.")
 
-	srv := &http.Server{
-		Addr:         listenAddr,
-		Handler:      authMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	newServer := func(addr string) *http.Server {
+		return &http.Server{
+			Addr:         addr,
+			Handler:      authMux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
 	}
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	httpSrv := newServer(httpAddr)
+	httpsSrv := newServer(httpsAddr)
+	httpsSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+
+	errCh := make(chan error, 2)
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+	go func() {
+		if err := httpsSrv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+	if err := <-errCh; err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }

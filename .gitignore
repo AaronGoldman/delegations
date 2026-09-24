@@ -14,3 +14,5 @@ examples/proxy/proxy
 .DS_Store
 examples/proxy/delegation-proxy-server
 http/http
+examples/proxy/certs/tls.crt
+examples/proxy/certs/tls.key
